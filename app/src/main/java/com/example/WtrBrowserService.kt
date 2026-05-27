@@ -1,0 +1,707 @@
+package com.example
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
+import android.os.Build
+import android.os.Bundle
+import android.os.IBinder
+import android.os.PowerManager
+import android.net.wifi.WifiManager
+import android.speech.tts.TextToSpeech
+import androidx.core.app.NotificationCompat
+import java.util.Locale
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+
+class WtrBrowserService : Service() {
+
+    private var mediaSession: MediaSession? = null
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
+    private val NOTIFICATION_ID = 4048
+    private val CHANNEL_ID = "wtr_tts_channel"
+
+    // Throttling fields to prevent system notification rate-limiting error: "Package enqueue rate is ... Shedding"
+    private var lastNotificationUpdateTime = 0L
+    private var lastIsPlaying: Boolean? = null
+    private val notificationHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var pendingNotificationRunnable: Runnable? = null
+
+    private var tts: TextToSpeech? = null
+    private var isTtsInitialized = false
+    private var currentSpeechText: String = ""
+    private var currentSpeechRate: Float = 4.0f
+    private var currentSpeechPitch: Float = 1.0f
+    private var currentSpeechLang: String = "en-US"
+    private var lastWordIndex: Int = 0
+
+    // Coroutine job to debounce state transitions during fast paragraph switching
+    private var cancelJob: kotlinx.coroutines.Job? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        createNotificationChannel()
+        setupMediaSession()
+
+        // Hook up the bridge to update notifications on playback changes
+        WtrAudioControlBridge.onStateChangedCallback = {
+            updateNotification()
+        }
+
+        // Hook up bridge TTS speaking controls
+        WtrAudioControlBridge.onSpeakNative = { text, rate, pitch, lang ->
+            speakText(text, rate, pitch, lang)
+        }
+        WtrAudioControlBridge.onCancelNative = {
+            handleCancelNative()
+        }
+        WtrAudioControlBridge.onPauseNative = {
+            pauseText()
+        }
+        WtrAudioControlBridge.onResumeNative = {
+            resumeText()
+        }
+        WtrAudioControlBridge.playCustomParagraphAction = { index ->
+            playCustomParagraph(index)
+        }
+
+        // Load initial values from SharedPreferences
+        val sharedPrefs = getSharedPreferences("wtr_browser_settings", Context.MODE_PRIVATE)
+        val speed = sharedPrefs.getFloat("tts_speed", 4.0f)
+        val pitch = sharedPrefs.getFloat("tts_pitch", 1.0f)
+        val accent = sharedPrefs.getString("tts_accent", "US") ?: "US"
+        val voiceName = sharedPrefs.getString("tts_voice_name", "") ?: ""
+
+        WtrAudioControlBridge.setTtsSpeed(speed)
+        WtrAudioControlBridge.setTtsPitch(pitch)
+        WtrAudioControlBridge.setTtsAccent(accent)
+        WtrAudioControlBridge.setTtsVoiceName(voiceName)
+
+        // Initialize TextToSpeech engine
+        tts = TextToSpeech(applicationContext) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                isTtsInitialized = true
+                setupTtsUtteranceListener()
+                fetchAndExposeAvailableVoices()
+            }
+        }
+
+        // Dynamically adjust SpeechRate and Pitch upon slider/choice settings changes
+        CoroutineScope(Dispatchers.Main).launch {
+            WtrAudioControlBridge.ttsSpeed.collect { s ->
+                if (isTtsInitialized) {
+                    try {
+                        tts?.setSpeechRate(s)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+            }
+        }
+        CoroutineScope(Dispatchers.Main).launch {
+            WtrAudioControlBridge.ttsPitch.collect { p ->
+                if (isTtsInitialized) {
+                    try {
+                        tts?.setPitch(p)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun fetchAndExposeAvailableVoices() {
+        if (!isTtsInitialized) return
+        try {
+            val voicesList = tts?.voices ?: emptySet()
+            // Filter English voices
+            val englishVoices = voicesList.filter { 
+                val loc = it.locale
+                loc != null && (loc.language.lowercase() == "en" || loc.language.lowercase() == "eng")
+            }
+            val voiceNames = englishVoices.map { it.name }.sorted()
+            WtrAudioControlBridge.setAvailableVoices(voiceNames)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun setupTtsUtteranceListener() {
+        tts?.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) {
+                WtrAudioControlBridge.updatePlaybackState(isPlaying = true)
+                WtrAudioControlBridge.onWebViewProgressTrigger?.invoke("start", 0)
+            }
+
+            override fun onDone(utteranceId: String?) {
+                // Keep playing state active since we transition seamlessly to next paragraph
+                WtrAudioControlBridge.onWebViewProgressTrigger?.invoke("end", 0)
+                
+                val list = WtrAudioControlBridge.playTrackInputList.value
+                val currentIndex = WtrAudioControlBridge.currentTrackIndex.value
+                val nextIndex = currentIndex + 1
+                
+                if (list.isNotEmpty()) {
+                    if (nextIndex < list.size) {
+                        android.os.Handler(android.os.Looper.getMainLooper()).post {
+                            playCustomParagraph(nextIndex)
+                        }
+                    } else {
+                        if (WtrAudioControlBridge.isAudiobookModeActive.value) {
+                            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                WtrAudioControlBridge.triggerNextChapter()
+                            }
+                        } else {
+                            WtrAudioControlBridge.setIsPlayerRunning(false)
+                            WtrAudioControlBridge.setCurrentlySpeakingText("")
+                            WtrAudioControlBridge.updatePlaybackState(false, null, "Completed Reading")
+                        }
+                    }
+                } else {
+                    WtrAudioControlBridge.onTtsDone?.invoke()
+                }
+            }
+
+            @Deprecated("Deprecated in Java")
+            override fun onError(utteranceId: String?) {
+                WtrAudioControlBridge.onWebViewProgressTrigger?.invoke("error", 0)
+            }
+
+            override fun onError(utteranceId: String?, errorCode: Int) {
+                WtrAudioControlBridge.onWebViewProgressTrigger?.invoke("error", 0)
+            }
+
+            override fun onRangeStart(utteranceId: String?, start: Int, end: Int, frame: Int) {
+                super.onRangeStart(utteranceId, start, end, frame)
+                lastWordIndex = start
+                WtrAudioControlBridge.onWebViewProgressTrigger?.invoke("boundary", start)
+            }
+        })
+    }
+
+    private fun speakText(text: String, rate: Float, pitch: Float, lang: String) {
+        if (!isTtsInitialized) {
+            return
+        }
+
+        // Cancel any pending pause/stopped state update so we transition seamlessly
+        cancelJob?.cancel()
+
+        currentSpeechText = text
+        currentSpeechRate = WtrAudioControlBridge.ttsSpeed.value
+        currentSpeechPitch = WtrAudioControlBridge.ttsPitch.value
+        currentSpeechLang = lang
+        lastWordIndex = 0
+
+        tts?.let {
+            it.setSpeechRate(currentSpeechRate)
+            it.setPitch(currentSpeechPitch)
+
+            val customVoiceName = WtrAudioControlBridge.ttsVoiceName.value
+            val systemVoice = if (customVoiceName.isNotEmpty()) {
+                try {
+                    it.voices?.find { v -> v.name == customVoiceName }
+                } catch (e: Exception) {
+                    null
+                }
+            } else {
+                null
+            }
+
+            if (systemVoice != null) {
+                try {
+                    it.voice = systemVoice
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            } else {
+                val locale = try {
+                    if (lang == "en-US") {
+                        val accent = WtrAudioControlBridge.ttsAccent.value
+                        when (accent) {
+                            "UK" -> Locale.UK
+                            "AU" -> Locale("en", "AU")
+                            "IN" -> Locale("en", "IN")
+                            else -> Locale.US
+                        }
+                    } else {
+                        Locale.forLanguageTag(lang)
+                    }
+                } catch (e: Exception) {
+                    Locale.US
+                }
+                it.language = locale
+            }
+
+            val utteranceId = "WTR_TTS_${System.currentTimeMillis()}"
+            val params = Bundle()
+            params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId)
+
+            // QUEUE_FLUSH automatically and instantly stops active audio and schedules the new speech
+            // on the single buffer cycle, avoiding deep hardware media-player recreate lags.
+            it.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
+            WtrAudioControlBridge.updatePlaybackState(isPlaying = true)
+        }
+    }
+
+    private fun handleCancelNative() {
+        cancelJob?.cancel()
+        if (isTtsInitialized) {
+            tts?.stop()
+        }
+        WtrAudioControlBridge.updatePlaybackState(false, null, "Paused")
+    }
+
+    private fun stopText() {
+        cancelJob?.cancel()
+        tts?.stop()
+        WtrAudioControlBridge.updatePlaybackState(false, null, "Stopped")
+    }
+
+    private fun pauseText() {
+        cancelJob?.cancel()
+        tts?.stop()
+        WtrAudioControlBridge.updatePlaybackState(false, null, "Paused")
+        WtrAudioControlBridge.onWebViewProgressTrigger?.invoke("pause", lastWordIndex)
+    }
+
+    private fun detectLanguageTag(text: String): String {
+        if (text.isEmpty()) return "en-US"
+        var zhCount = 0
+        var viCount = 0
+        var ruCount = 0
+        var enCount = 0
+        val sampleLength = minOf(text.length, 250)
+        for (i in 0 until sampleLength) {
+            val c = text[i]
+            when {
+                c in '\u4e00'..'\u9fa5' -> zhCount++
+                c in '\u0400'..'\u04FF' -> ruCount++
+                "áàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđÁÀẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬÉÈẺẼẸÊẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴĐ".contains(c) -> viCount++
+                c.isLetter() && c.code < 128 -> enCount++
+            }
+        }
+        
+        if (enCount > 25) {
+            return "en-US"
+        }
+        
+        val maxCount = maxOf(zhCount, viCount, ruCount, enCount)
+        return when {
+            maxCount == 0 -> "en-US"
+            maxCount == zhCount -> "zh-CN"
+            maxCount == viCount -> "vi-VN"
+            maxCount == ruCount -> "ru-RU"
+            else -> "en-US"
+        }
+    }
+
+    private fun playCustomParagraph(index: Int) {
+        val list = WtrAudioControlBridge.playTrackInputList.value
+        if (list.isNotEmpty()) {
+            val validIndex = index.coerceIn(0, list.size - 1)
+            WtrAudioControlBridge.setCurrentTrackIndex(validIndex)
+            val textToSpeak = list[validIndex]
+            WtrAudioControlBridge.setCurrentlySpeakingText(textToSpeak)
+            WtrAudioControlBridge.setIsPlayerRunning(true)
+
+            WtrAudioControlBridge.updatePlaybackState(
+                isPlaying = true,
+                title = WtrAudioControlBridge.bookTitle,
+                subtitle = "Paragraph ${validIndex + 1} of ${list.size}"
+            )
+
+            val detectedLang = detectLanguageTag(textToSpeak)
+            speakText(textToSpeak, WtrAudioControlBridge.ttsSpeed.value, WtrAudioControlBridge.ttsPitch.value, detectedLang)
+        }
+    }
+
+    private fun handleNextTrack() {
+        val list = WtrAudioControlBridge.playTrackInputList.value
+        val currentIndex = WtrAudioControlBridge.currentTrackIndex.value
+        val nextIndex = currentIndex + 1
+        if (list.isNotEmpty()) {
+            if (nextIndex < list.size) {
+                playCustomParagraph(nextIndex)
+            } else if (WtrAudioControlBridge.isAudiobookModeActive.value) {
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    WtrAudioControlBridge.triggerNextChapter()
+                }
+            }
+        }
+    }
+
+    private fun handlePrevTrack() {
+        val list = WtrAudioControlBridge.playTrackInputList.value
+        val currentIndex = WtrAudioControlBridge.currentTrackIndex.value
+        val prevIndex = currentIndex - 1
+        if (list.isNotEmpty() && prevIndex >= 0) {
+            playCustomParagraph(prevIndex)
+        }
+    }
+
+    private fun resumeText() {
+        val list = WtrAudioControlBridge.playTrackInputList.value
+        if (list.isNotEmpty()) {
+            val currentIndex = WtrAudioControlBridge.currentTrackIndex.value
+            playCustomParagraph(currentIndex)
+        } else if (currentSpeechText.isNotEmpty() && lastWordIndex < currentSpeechText.length) {
+            val remainingText = currentSpeechText.substring(lastWordIndex)
+            tts?.let {
+                currentSpeechRate = WtrAudioControlBridge.ttsSpeed.value
+                it.setSpeechRate(currentSpeechRate)
+                it.setPitch(currentSpeechPitch)
+
+                val locale = try {
+                    Locale.forLanguageTag(currentSpeechLang)
+                } catch (e: Exception) {
+                    Locale.US
+                }
+                it.language = locale
+
+                val utteranceId = "WTR_TTS_RESUME_${System.currentTimeMillis()}"
+                val params = Bundle()
+                params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId)
+
+                it.speak(remainingText, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
+                WtrAudioControlBridge.onWebViewProgressTrigger?.invoke("resume", lastWordIndex)
+            }
+        } else {
+            WtrAudioControlBridge.playAction?.invoke()
+        }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val action = intent?.action
+        if (action != null) {
+            handleAction(action)
+        }
+
+        // Keep foreground active
+        updateNotification()
+        return START_STICKY
+    }
+
+    private fun handleAction(action: String) {
+        val hasCustomTracks = WtrAudioControlBridge.playTrackInputList.value.isNotEmpty()
+        when (action) {
+            "PLAY" -> {
+                if (hasCustomTracks) {
+                    resumeText()
+                } else {
+                    WtrAudioControlBridge.playAction?.invoke()
+                }
+            }
+            "PAUSE" -> {
+                if (hasCustomTracks) {
+                    pauseText()
+                } else {
+                    WtrAudioControlBridge.pauseAction?.invoke()
+                }
+            }
+            "PLAY_PAUSE" -> {
+                val isPlaying = WtrAudioControlBridge.isPlaying.value
+                if (isPlaying) {
+                    if (hasCustomTracks) pauseText() else WtrAudioControlBridge.pauseAction?.invoke()
+                } else {
+                    if (hasCustomTracks) resumeText() else WtrAudioControlBridge.playAction?.invoke()
+                }
+            }
+            "NEXT" -> {
+                if (hasCustomTracks) {
+                    handleNextTrack()
+                } else {
+                    WtrAudioControlBridge.nextAction?.invoke()
+                }
+            }
+            "PREV" -> {
+                if (hasCustomTracks) {
+                    handlePrevTrack()
+                } else {
+                    WtrAudioControlBridge.prevAction?.invoke()
+                }
+            }
+        }
+    }
+
+    private fun setupMediaSession() {
+        mediaSession = MediaSession(this, "WtrLabSession").apply {
+            isActive = true
+            setCallback(object : MediaSession.Callback() {
+                override fun onPlay() {
+                    handleAction("PLAY")
+                }
+
+                override fun onPause() {
+                    handleAction("PAUSE")
+                }
+
+                override fun onSkipToNext() {
+                    handleAction("NEXT")
+                }
+
+                override fun onSkipToPrevious() {
+                    handleAction("PREV")
+                }
+            })
+        }
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Wtr-Lab TTS Playback",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Controls and status for novel TTS reading"
+                setSound(null, null)
+                enableVibration(false)
+            }
+            val manager = getSystemService(NotificationManager::class.java)
+            manager?.createNotificationChannel(channel)
+        }
+    }
+
+    private fun updateNotification() {
+        val isPlaying = WtrAudioControlBridge.isPlaying.value
+        val title = WtrAudioControlBridge.title.value
+        val subtitle = WtrAudioControlBridge.subtitle.value
+
+        // Manage WakeLock & WifiLock based on playing state
+        if (isPlaying) {
+            acquireWakeLock()
+            acquireWifiLock()
+        } else {
+            releaseWakeLock()
+            releaseWifiLock()
+        }
+
+        // Update MediaSession state instantly (lightweight, not rate-limited by system UI)
+        val stateBuilder = PlaybackState.Builder()
+            .setActions(
+                PlaybackState.ACTION_PLAY or
+                PlaybackState.ACTION_PAUSE or
+                PlaybackState.ACTION_SKIP_TO_NEXT or
+                PlaybackState.ACTION_SKIP_TO_PREVIOUS
+            )
+            .setState(
+                if (isPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED,
+                PlaybackState.PLAYBACK_POSITION_UNKNOWN,
+                1.0f
+            )
+        mediaSession?.setPlaybackState(stateBuilder.build())
+
+        // Feed content artist & title metadata to MediaSession instantly so systems show labels without delay
+        val bTitle = WtrAudioControlBridge.novelName.value.ifEmpty { WtrAudioControlBridge.bookTitle.ifEmpty { title } }
+        val bChapter = WtrAudioControlBridge.chapterTitle.value
+        val bWebsite = WtrAudioControlBridge.activeWebsite.value
+        val currentIdx = WtrAudioControlBridge.currentTrackIndex.value
+        val listSize = WtrAudioControlBridge.playTrackInputList.value.size
+
+        val displayTitle = if (bChapter.isNotEmpty()) {
+            "$bTitle - $bChapter"
+        } else {
+            bTitle
+        }
+
+        val displaySubtitle = if (listSize > 0) {
+            val siteSuffix = if (bWebsite.isNotEmpty()) " on $bWebsite" else ""
+            "P. ${currentIdx + 1}/$listSize$siteSuffix"
+        } else {
+            subtitle
+        }
+
+        try {
+            val metadataBuilder = android.media.MediaMetadata.Builder()
+                .putString(android.media.MediaMetadata.METADATA_KEY_TITLE, displayTitle)
+                .putString(android.media.MediaMetadata.METADATA_KEY_ARTIST, displaySubtitle)
+                .putString(android.media.MediaMetadata.METADATA_KEY_ALBUM, "Wtr-Lab Novel Reader")
+                .putLong(android.media.MediaMetadata.METADATA_KEY_DURATION, -1L) // disables duration layout on system lock screens
+            mediaSession?.setMetadata(metadataBuilder.build())
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        val currentTime = System.currentTimeMillis()
+        val playStateChanged = lastIsPlaying != isPlaying
+        lastIsPlaying = isPlaying
+
+        // Force immediate notification update on play/pause toggle, when stopped, or if 1.5s has elapsed.
+        if (playStateChanged || (currentTime - lastNotificationUpdateTime >= 1500L) || !isPlaying) {
+            pendingNotificationRunnable?.let { notificationHandler.removeCallbacks(it) }
+            pendingNotificationRunnable = null
+            
+            performActualNotificationUpdate(isPlaying, displayTitle, displaySubtitle)
+            lastNotificationUpdateTime = currentTime
+        } else {
+            // Defer notification draw to reflect the last status accurately without spamming
+            pendingNotificationRunnable?.let { notificationHandler.removeCallbacks(it) }
+            val runnable = Runnable {
+                performActualNotificationUpdate(isPlaying, displayTitle, displaySubtitle)
+                lastNotificationUpdateTime = System.currentTimeMillis()
+            }
+            pendingNotificationRunnable = runnable
+            notificationHandler.postDelayed(runnable, 1500L - (currentTime - lastNotificationUpdateTime))
+        }
+    }
+
+    private fun performActualNotificationUpdate(isPlaying: Boolean, displayTitle: String, displaySubtitle: String) {
+        // Intents
+        val openAppIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val openAppPendingIntent = PendingIntent.getActivity(
+            this, 0, openAppIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val prevIntent = Intent(this, WtrBrowserService::class.java).apply { action = "PREV" }
+        val prevPendingIntent = PendingIntent.getService(
+            this, 1, prevIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val playActionIntent = Intent(this, WtrBrowserService::class.java).apply {
+            action = if (isPlaying) "PAUSE" else "PLAY"
+        }
+        val playPendingIntent = PendingIntent.getService(
+            this, 2, playActionIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val nextIntent = Intent(this, WtrBrowserService::class.java).apply { action = "NEXT" }
+        val nextPendingIntent = PendingIntent.getService(
+            this, 3, nextIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val playPauseIcon = if (isPlaying) {
+            android.R.drawable.ic_media_pause
+        } else {
+            android.R.drawable.ic_media_play
+        }
+
+        // Build notification using native framework builder
+        val notificationBuilder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(this, CHANNEL_ID)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(this)
+        }
+
+        val mediaStyle = Notification.MediaStyle()
+            .setMediaSession(mediaSession?.sessionToken)
+            .setShowActionsInCompactView(0, 1, 2)
+
+        notificationBuilder
+            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setContentTitle(displayTitle)
+            .setContentText(displaySubtitle)
+            .setOngoing(isPlaying)
+            .setContentIntent(openAppPendingIntent)
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .setStyle(mediaStyle)
+            .setShowWhen(false) // suppress timeline tracking ("00:00") labels
+
+        // Actions
+        val prevAction = Notification.Action.Builder(
+            android.R.drawable.ic_media_previous, "Previous", prevPendingIntent
+        ).build()
+        val playPauseAction = Notification.Action.Builder(
+            playPauseIcon, if (isPlaying) "Pause" else "Play", playPendingIntent
+        ).build()
+        val nextAction = Notification.Action.Builder(
+            android.R.drawable.ic_media_next, "Next", nextPendingIntent
+        ).build()
+
+        notificationBuilder.addAction(prevAction)
+        notificationBuilder.addAction(playPauseAction)
+        notificationBuilder.addAction(nextAction)
+
+        val notification = notificationBuilder.build()
+
+        // Android 14 requirements: Foreground service type mediaPlayback. 
+        // We always use startForeground to enroll/keep active safely.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+    }
+
+    private fun acquireWakeLock() {
+        synchronized(this) {
+            if (wakeLock == null) {
+                val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+                wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "WtrLab::PlaybackWakeLock")
+                wakeLock?.acquire()
+            }
+        }
+    }
+
+    private fun releaseWakeLock() {
+        synchronized(this) {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+            }
+            wakeLock = null
+        }
+    }
+
+    private fun acquireWifiLock() {
+        synchronized(this) {
+            if (wifiLock == null) {
+                try {
+                    val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+                    wifiLock = wifiManager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "WtrLab::PlaybackWifiLock")
+                    wifiLock?.acquire()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
+
+    private fun releaseWifiLock() {
+        synchronized(this) {
+            if (wifiLock?.isHeld == true) {
+                try {
+                    wifiLock?.release()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+            wifiLock = null
+        }
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onDestroy() {
+        WtrAudioControlBridge.onStateChangedCallback = null
+        WtrAudioControlBridge.onSpeakNative = null
+        WtrAudioControlBridge.onCancelNative = null
+        WtrAudioControlBridge.onPauseNative = null
+        WtrAudioControlBridge.onResumeNative = null
+        WtrAudioControlBridge.playCustomParagraphAction = null
+
+        tts?.let {
+            it.stop()
+            it.shutdown()
+        }
+        tts = null
+
+        releaseWakeLock()
+        releaseWifiLock()
+        mediaSession?.release()
+        mediaSession = null
+        super.onDestroy()
+    }
+}

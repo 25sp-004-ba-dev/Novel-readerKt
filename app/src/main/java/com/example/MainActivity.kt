@@ -1,0 +1,107 @@
+package com.example
+
+import android.annotation.SuppressLint
+import android.content.Intent
+import android.os.Build
+import android.os.Bundle
+import android.webkit.WebView
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.*
+import androidx.compose.ui.platform.LocalContext
+import com.example.ui.BrowserAppScreen
+import com.example.ui.theme.MyApplicationTheme
+import java.util.ArrayList
+
+class MainActivity : ComponentActivity() {
+
+    companion object {
+        // Core tracking pool to safely avoid leaks and handle standard onDestroy destruction
+        val activeWebViewsPool = java.util.Collections.synchronizedList(ArrayList<WebView>())
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        WtrLogManager.initialize(this)
+        enableEdgeToEdge()
+
+        // Fast request for notification permissions on Android 13+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 101)
+        }
+
+        // Start Foreground Service to manage Media Session right away
+        val serviceIntent = Intent(this, WtrBrowserService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent)
+        } else {
+            startService(serviceIntent)
+        }
+
+        setContent {
+            val context = LocalContext.current
+            val sharedPrefs = remember(context) { context.getSharedPreferences("wtr_browser_settings", android.content.Context.MODE_PRIVATE) }
+            var activeThemeName by remember { mutableStateOf(sharedPrefs.getString("app_theme", "Dark") ?: "Dark") }
+
+            MyApplicationTheme(themeName = activeThemeName) {
+                // Pass a placeholder WebView so the function signature is kept, but internally we use our pool!
+                BrowserAppScreen(
+                    webView = WebView(this),
+                    onThemeChanged = { newTheme ->
+                        activeThemeName = newTheme
+                    }
+                )
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        WtrAudioControlBridge.onWebViewProgressTrigger = null
+        synchronized(activeWebViewsPool) {
+            for (wv in activeWebViewsPool) {
+                try {
+                    wv.stopLoading()
+                    wv.removeAllViews()
+                    wv.destroy()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+            activeWebViewsPool.clear()
+        }
+        super.onDestroy()
+    }
+}
+
+fun getProxyTranslatedUrl(url: String): String {
+    val lower = url.lowercase()
+    if (lower.contains("translate.goog") || lower.contains("translate.google")) {
+        return url
+    }
+    try {
+        val uri = android.net.Uri.parse(url)
+        val host = uri.host ?: return url
+        val cleanHost = host.replace("www.", "").replace(".", "-") + ".translate.goog"
+        val path = uri.encodedPath ?: ""
+        val query = uri.encodedQuery
+        
+        val builder = android.net.Uri.Builder()
+            .scheme("https")
+            .encodedAuthority(cleanHost)
+            .encodedPath(path)
+            
+        if (query != null) {
+            builder.encodedQuery(query)
+            builder.appendQueryParameter("_x_tr_sl", "auto")
+            builder.appendQueryParameter("_x_tr_tl", "en")
+        } else {
+            builder.appendQueryParameter("_x_tr_sl", "auto")
+            builder.appendQueryParameter("_x_tr_tl", "en")
+        }
+        return builder.build().toString()
+    } catch (e: Exception) {
+        return url
+    }
+}
