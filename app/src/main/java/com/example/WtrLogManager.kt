@@ -60,14 +60,12 @@ object WtrLogManager {
                     _logs.removeAt(_logs.size - 1)
                 }
                 
-                // Persistence moved to background or disabled on every log to prevent jank
-                /*
+                // Persist logs in the background using apply()
                 context?.let { ctx ->
                     val serialized = _logs.joinToString("||LC||")
                     val sharedPrefs = ctx.getSharedPreferences("wtr_browser_settings", Context.MODE_PRIVATE)
                     sharedPrefs.edit().putString("saved_logs_serialized", serialized).apply()
                 }
-                */
             }
         }
     }

@@ -113,7 +113,7 @@ object WtrAudioControlBridge {
     }
 
     fun setWebSpeakNativeFallbackList(list: List<String>) {
-        _webSpeakNativeFallbackList.value = list
+        _webSpeakNativeFallbackList.value = if (list.size > 500) list.take(500) else list
     }
 
     fun setWebSpeakNativeFallbackIndex(index: Int) {
@@ -152,7 +152,7 @@ object WtrAudioControlBridge {
     }
 
     fun setPlayTrackInputList(list: List<String>) {
-        _playTrackInputList.value = list
+        _playTrackInputList.value = if (list.size > 500) list.take(500) else list
     }
 
     fun setCurrentTrackIndex(index: Int) {

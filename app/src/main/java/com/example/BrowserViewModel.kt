@@ -282,7 +282,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun exportBackup(outputStream: java.io.OutputStream, onSuccess: () -> Unit, onError: (Exception) -> Unit) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 val json = org.json.JSONObject()
                 json.put("version", 1)
@@ -367,7 +367,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun importBackup(inputStream: java.io.InputStream, onSuccess: () -> Unit, onError: (Exception) -> Unit) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 val jsonString = withContext(Dispatchers.IO) {
                     val reader = java.io.BufferedReader(java.io.InputStreamReader(inputStream, "UTF-8"))

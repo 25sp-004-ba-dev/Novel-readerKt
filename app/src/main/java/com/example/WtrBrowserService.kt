@@ -21,6 +21,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancel
 
 class WtrBrowserService : Service() {
 
@@ -131,11 +132,20 @@ class WtrBrowserService : Service() {
                 isTtsInitialized = true
                 setupTtsUtteranceListener()
                 fetchAndExposeAvailableVoices()
+            } else {
+                WtrLogManager.log(applicationContext, "TextToSpeech engine failed to initialize with status: $status")
+            }
+        }
+        
+        serviceScope.launch {
+            delay(3000)
+            if (!isTtsInitialized) {
+                WtrLogManager.log(applicationContext, "TextToSpeech engine initialization timed out.")
             }
         }
 
         // Dynamically adjust SpeechRate and Pitch upon slider/choice settings changes
-        CoroutineScope(Dispatchers.Main).launch {
+        serviceScope.launch {
             WtrAudioControlBridge.ttsSpeed.collect { s ->
                 if (isTtsInitialized) {
                     try {
@@ -146,7 +156,7 @@ class WtrBrowserService : Service() {
                 }
             }
         }
-        CoroutineScope(Dispatchers.Main).launch {
+        serviceScope.launch {
             WtrAudioControlBridge.ttsPitch.collect { p ->
                 if (isTtsInitialized) {
                     try {
@@ -598,8 +608,8 @@ class WtrBrowserService : Service() {
         val playStateChanged = lastIsPlaying != isPlaying
         lastIsPlaying = isPlaying
 
-        // Force immediate notification update on play/pause toggle, when stopped, or if 1.5s has elapsed.
-        if (playStateChanged || (currentTime - lastNotificationUpdateTime >= 1500L) || !isPlaying) {
+        // Force immediate notification update on play/pause toggle, when stopped, or if 500ms has elapsed.
+        if (playStateChanged || (currentTime - lastNotificationUpdateTime >= 500L) || !isPlaying) {
             pendingNotificationRunnable?.let { notificationHandler.removeCallbacks(it) }
             pendingNotificationRunnable = null
             
@@ -613,7 +623,7 @@ class WtrBrowserService : Service() {
                 lastNotificationUpdateTime = System.currentTimeMillis()
             }
             pendingNotificationRunnable = runnable
-            notificationHandler.postDelayed(runnable, 1500L - (currentTime - lastNotificationUpdateTime))
+            notificationHandler.postDelayed(runnable, 500L - (currentTime - lastNotificationUpdateTime))
         }
     }
 
@@ -766,6 +776,8 @@ class WtrBrowserService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        serviceScope.cancel()
+        webviewSpeechTimeoutHandler.removeCallbacks(webviewSpeechTimeoutRunnable)
         WtrAudioControlBridge.onStateChangedCallback = null
         WtrAudioControlBridge.onSpeakNative = null
         WtrAudioControlBridge.onCancelNative = null
