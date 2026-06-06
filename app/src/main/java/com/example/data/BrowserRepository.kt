@@ -22,6 +22,25 @@ class BrowserRepository(private val browserDao: BrowserDao) {
     suspend fun deleteHistory(id: Long) = browserDao.deleteHistory(id)
     suspend fun clearHistory() = browserDao.clearHistory()
 
+    companion object {
+        private val titlePatterns = listOf(
+            Regex("""(?i)(?:Chapter|Ch\.|Ch|Episode)\s*(\d+(:?\.\d+)?(-(\d+))?)"""),
+            Regex("""(?i)\b(?:chapter|chap|ch|episode|ep)\.?\s*([ivxldcm]+)"""),
+            Regex("""(第\s*[0-9一二三四五六七八九十百千万]+[章回节集卷折篇])"""),
+            Regex("""(?i)Chapter\s*([a-zA-Z0-9]+)"""),
+            Regex("""(?i)Ch\s*([a-zA-Z0-9]+)"""),
+            Regex("""\b(\d+)\s*$""")
+        )
+
+        private val urlPatterns = listOf(
+            Regex("""(?i)chapter[-_]?(\d+)"""),
+            Regex("""(?i)ch[-_]?(\d+)"""),
+            Regex("""wtr=([a-zA-Z0-9_]+)"""),
+            Regex("""/(\d+)\.html"""),
+            Regex("""/(\d+)""")
+        )
+    }
+
     private fun extractNovelAndChapter(title: String, url: String): Pair<String, String> {
         if (title.isEmpty()) return Pair("Wtr-Lab Browser", "Web Chapter")
         
@@ -58,13 +77,6 @@ class BrowserRepository(private val browserDao: BrowserDao) {
             cleanTitle = cleanTitle.substring(1, cleanTitle.length - 1).trim()
         }
 
-        val chapterPatterns = listOf(
-            Regex("""(?i)\b(?:chapter|chap|ch|episode|ep)\.?\s*(\d+)"""), // Chapter 123 / Ch. 123
-            Regex("""(?i)\b(?:chapter|chap|ch|episode|ep)\.?\s*([ivxldcm]+)"""), // Roman
-            Regex("""(第\s*[0-9一二三四五六七八九十百千]+[章回节集卷])"""), // Chinese: 第123章 / 第一百章
-            Regex("""\b(\d+)\s*$""") // Digits at the very end of the title
-        )
-
         var extractedChapter = ""
         var extractedNovel = ""
 
@@ -77,7 +89,7 @@ class BrowserRepository(private val browserDao: BrowserDao) {
                     val part1 = parts.drop(1).joinToString(" - ").trim()
                     
                     var isPart1Chapter = false
-                    for (pattern in chapterPatterns) {
+                    for (pattern in titlePatterns) {
                         if (pattern.containsMatchIn(part1)) {
                             isPart1Chapter = true
                             break
@@ -85,7 +97,7 @@ class BrowserRepository(private val browserDao: BrowserDao) {
                     }
                     
                     var isPart0Chapter = false
-                    for (pattern in chapterPatterns) {
+                    for (pattern in titlePatterns) {
                         if (pattern.containsMatchIn(part0)) {
                             isPart0Chapter = true
                             break
@@ -103,7 +115,7 @@ class BrowserRepository(private val browserDao: BrowserDao) {
             }
         }
 
-        for (pattern in chapterPatterns) {
+        for (pattern in titlePatterns) {
             val match = pattern.find(cleanTitle)
             if (match != null) {
                 val fullMatch = match.value
@@ -121,13 +133,6 @@ class BrowserRepository(private val browserDao: BrowserDao) {
         }
 
         if (extractedChapter.isEmpty()) {
-            val urlPatterns = listOf(
-                Regex("""(?i)chapter[-_]?(\d+)"""),
-                Regex("""(?i)ch[-_]?(\d+)"""),
-                Regex("""wtr=([a-zA-Z0-9_]+)"""),
-                Regex("""/(\d+)\.html"""),
-                Regex("""/(\d+)""")
-            )
             for (pattern in urlPatterns) {
                 val match = pattern.find(url)
                 if (match != null) {

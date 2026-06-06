@@ -151,6 +151,22 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
 
+    // Memory Leak Preventer
+    LaunchedEffect(tabsList) {
+        val currentTabIds = tabsList.map { it.id }.toSet()
+        val webViewIds = webViewsMap.keys.toSet()
+        val removedIds = webViewIds - currentTabIds
+        for (id in removedIds) {
+            val wv = webViewsMap.remove(id)
+            wv?.apply {
+                stopLoading()
+                clearHistory()
+                MainActivity.activeWebViewsPool.remove(this)
+                destroy()
+            }
+        }
+    }
+
     // Maintain a map of dynamic WebViews keyed by Tab ID
     var runHtmlTextExtractionAndPlayRef by remember { mutableStateOf<(() -> Unit)?>(null) }
 
@@ -314,6 +330,30 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                         super.onReceivedError(view, request, error)
                         if (request?.isForMainFrame == true) {
                             com.example.WtrLogManager.log(context, "onReceivedError tab=${tab.id}: ${error?.description}")
+                            
+                            val errorHtml = """
+                                <html>
+                                <head>
+                                    <meta name="viewport" content="width=device-width, initial-scale=1">
+                                    <style>
+                                        body { font-family: sans-serif; padding: 40px; text-align: center; color: #666; background: #f9f9f9; }
+                                        h1 { color: #333; }
+                                        .btn { margin-top: 20px; padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; font-size: 16px; cursor: pointer; }
+                                        @media (prefers-color-scheme: dark) {
+                                            body { color: #aaa; background: #121212; }
+                                            h1 { color: #ddd; }
+                                            .btn { background: #bb86fc; color: #000; }
+                                        }
+                                    </style>
+                                </head>
+                                <body>
+                                    <h1>Navigation Failed</h1>
+                                    <p>${error?.description ?: "Network error occurred."}</p>
+                                    <button class="btn" onclick="window.location.reload()">Try Again</button>
+                                </body>
+                                </html>
+                            """.trimIndent()
+                            view?.loadDataWithBaseURL(request.url.toString(), errorHtml, "text/html", "UTF-8", request.url.toString())
                         }
                     }
 
@@ -357,8 +397,9 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                     },
                     onUrlSynced = { syncedUrl, htmlTitle ->
                         val currentActive = viewModel.currentTab.value
+                        val triggeringTab = viewModel.allTabs.value.find { it.id == tab.id }
                         val isWebUrl = syncedUrl.startsWith("http://") || syncedUrl.startsWith("https://")
-                        if (isWebUrl && currentActive?.id == tab.id && (currentActive.url != syncedUrl || currentActive.title != htmlTitle) && currentActive.url != "chrome://newtab") {
+                        if (isWebUrl && currentActive?.id == tab.id && triggeringTab?.id == tab.id && (currentActive.url != syncedUrl || currentActive.title != htmlTitle) && currentActive.url != "chrome://newtab") {
                             com.example.WtrLogManager.log(context, "onUrlSynced matching tab ID=${tab.id} synchronized to: $syncedUrl (title: $htmlTitle)")
                             coroutineScope.launch {
                                 viewModel.onPageLoaded(syncedUrl, htmlTitle)
@@ -658,12 +699,16 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                                 webView.evaluateJavascript(
                                     """
                                     (function() {
-                                        try {
-                                            let paragraphs = [];
-                                            let elements = [];
-                                            let host = window.location.hostname;
-                                            
-                                            function isJunk(text) {
+                                        if (window.__wtrTextExtractor) {
+                                            return window.__wtrTextExtractor();
+                                        }
+                                        window.__wtrTextExtractor = function() {
+                                            try {
+                                                let paragraphs = [];
+                                                let elements = [];
+                                                let host = window.location.hostname;
+                                                
+                                                function isJunk(text) {
                                                 let t = text.toLowerCase().trim();
                                                 if (t.length < 5) {
                                                     // Allow short Chinese phrases that are clearly not junk
@@ -848,7 +893,9 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                                                 error: e.toString()
                                             });
                                         }
-                                    })();
+                                    };
+                                    return window.__wtrTextExtractor();
+                                })();
                                     """.trimIndent()
                                 ) { res ->
                                     continuation.resume(res)
