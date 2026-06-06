@@ -324,22 +324,21 @@ fun injectTtsBridgeScript(webView: WebView) {
             }, 500);
 
             function findParagraphProgress() {
-                // 1. Prioritize looking inside elements containing "tts" or "player" class/ID to locate paragraph progress
-                let ttsQueryMatches = document.querySelectorAll('[class*="tts" i], [id*="tts" i], [class*="player" i], [id*="player" i], .tts-bar, #tts-bar');
+                // 1. Prioritize looking inside elements containing "tts" or "player" class/ID
+                let ttsQueryMatches = document.querySelectorAll('[class*="tts" i], [id*="tts" i], [class*="player" i], [id*="player" i], .tts-bar, #tts-bar, .tts-hud');
                 for (let container of ttsQueryMatches) {
-                    let selectors = ['.tts-progress', '.paragraph-index', '.paragraph-count', '.progress', '.text', 'span', 'div', 'p'];
+                    let selectors = ['.tts-progress', '.paragraph-index', '.paragraph-count', '.progress', '.text', 'span', 'div', 'p', 'font'];
                     for (let sel of selectors) {
                         try {
                             let els = container.querySelectorAll(sel);
                             for (let el of els) {
-                                let txt = el.innerText || el.textContent || "";
-                                // Exclude chapter progress strings explicitly to avoid confusing chapter trackers with paragraph progress
-                                if (/chapter|chap|vol|ch\b/i.test(txt)) {
+                                let txt = (el.innerText || el.textContent || "").trim();
+                                if (/chapter|chap|vol|ch\b/i.test(txt) || txt.includes("章")) {
                                     continue;
                                 }
-                                let match = txt.match(/\b\d+\s*([\/]|of)\s*\d+\b/);
+                                let match = txt.match(/\b\d+\s*([\/]|of|\|)\s*\d+\b/);
                                 if (match) {
-                                    return match[0].replace(/\s*of\s*/i, '/');
+                                    return match[0].replace(/\s*of\s*/i, '/').replace(/\s*\|\s*/i, '/');
                                 }
                             }
                         } catch(e) {}
@@ -350,19 +349,20 @@ fun injectTtsBridgeScript(webView: WebView) {
                 let selectors = [
                     '.tts-progress', '.paragraph-index', '.paragraph-count', 
                     '.player-progress', '.progress-text', '.tts-player-progress',
-                    '.tts-status', '.speech-progress', '[class*="progress" i] [class*="index" i]'
+                    '.tts-status', '.speech-progress', '[class*="progress" i] [class*="index" i]',
+                    '.cur-p'
                 ];
                 for (let sel of selectors) {
                     try {
                         let els = document.querySelectorAll(sel);
                         for (let el of els) {
-                            let txt = el.innerText || el.textContent || "";
-                            if (/chapter|chap|vol|ch\b/i.test(txt)) {
+                            let txt = (el.innerText || el.textContent || "").trim();
+                            if (/chapter|chap|vol|ch\b/i.test(txt) || txt.includes("章")) {
                                 continue;
                             }
-                            let match = txt.match(/\b\d+\s*([\/]|of)\s*\d+\b/);
+                            let match = txt.match(/\b\d+\s*([\/]|of|\|)\s*\d+\b/);
                             if (match) {
-                                return match[0].replace(/\s*of\s*/i, '/');
+                                return match[0].replace(/\s*of\s*/i, '/').replace(/\s*\|\s*/i, '/');
                             }
                         }
                     } catch(e) {}
@@ -437,7 +437,29 @@ fun injectTtsBridgeScript(webView: WebView) {
                 if (window.WtrBridge && window.WtrBridge.syncUrl) {
                     window.WtrBridge.syncUrl(syncedUrl, document.title || "Wtr-Lab Novel");
                 }
-            }, 1000);
+                
+                if (window.WtrBridge && window.WtrBridge.syncMetadata) {
+                    let cover = '';
+                    let meta = document.querySelector('meta[property="og:image"]');
+                    if (meta && meta.content) cover = meta.content;
+                    if (!cover) {
+                        let linkSrc = document.querySelector('link[rel="image_src"]');
+                        if (linkSrc && linkSrc.href) cover = linkSrc.href;
+                    }
+                    if (!cover) {
+                        let img = document.querySelector('.book-cover img, .cover img, .novel-cover img, img.cover, .cover-box img, .pic img, img.book-img');
+                        if (img && img.src) cover = img.src;
+                    }
+
+                    let dynTitle = document.title || "";
+                    let h1 = document.querySelector('h1.title, h1.book-title, .novel-title');
+                    if (h1 && h1.innerText && h1.innerText.length > 0) {
+                        dynTitle = h1.innerText.trim();
+                    }
+
+                    window.WtrBridge.syncMetadata(document.title || "", dynTitle, cover);
+                }
+            }, 500);
         })();
     """.trimIndent()
     webView.evaluateJavascript(jsScript, null)

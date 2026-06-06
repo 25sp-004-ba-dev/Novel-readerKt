@@ -13,6 +13,11 @@ class WtrWebAppInterface(
     }
 
     @JavascriptInterface
+    fun syncMetadata(novelTitle: String, chapterTitle: String, coverImage: String) {
+        WtrAudioControlBridge.onMetadataExtracted?.invoke(tabId, novelTitle, chapterTitle, coverImage)
+    }
+
+    @JavascriptInterface
     fun postPlaybackState(isPlaying: Boolean, title: String, subtitle: String) {
         if (isPlaying) {
             WtrAudioControlBridge.setActiveTtsTabId(tabId)

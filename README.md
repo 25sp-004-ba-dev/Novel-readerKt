@@ -78,7 +78,8 @@ The reader engine has specialized scraper logic and optimized playback flows for
 
 ## 🚀 Complete Feature Catalog
 
-### 1. Multi-Profile Visual Reader Themes
+### 1. Multi-Profile Visual Reader Themes & Full-Screen Settings
+* **Dedicated Settings Panel**: Provides a comprehensive full-screen interface for granular controls over themes, text-zoom scaling, adblockers, and full JSON database backups without cluttering the reading view.
 * **Distraction-Free Reading Profiles**: Novel Reader includes six custom-designed, eye-safe visual styles that automatically color-pair headings, background containers, and navigation items:
   1. **Slate Grey**: Crisp text contrasted against deep, charcoal backdrops.
   2. **Night Dark**: Ultra-low luminance black theme optimized for pure OLED panels.
@@ -117,7 +118,8 @@ The reader engine has specialized scraper logic and optimized playback flows for
 * **Local Room Database State Saving**: Tab states, ordering indices, open folder groupings, history logs, and chapter bookmarks are immediately saved into Room structures, preserving open pages even during system reboots.
 * **Tab-Scoped Audio Sessions & Thread Isolation**: Native Text-To-Speech queues are tracked and bound strictly to their originating Tab ID. Switching tabs no longer halts background reading, allowing users to browse concurrent articles, run searches, or open parallel index groups without overlapping audio channels. Previous playback is safely released only when a new TTS sequence is explicitly started.
 
-### 7. Integrated Diagnostics, Session Log Recorder & Safe Navigation Pools
+### 7. Integrated Diagnostics, Automated Translated Title Syncing, & Logs
+* **Translated Bookmarks Synchronization**: Advanced bridging parses both DOM metadata (cover images, H1 titles) and Javascript `document.title` on standard intervals. Even if a user bookmarks a page before automatic translation completes, local databases seamlessly update behind-the-scenes using root host-matching to ensure English translations automatically display across the History and Bookmark grids. 
 * **System Diagnostic Logs (`WtrLogManager`)**: An in-app diagnostic recorder captures critical web views lifecycle events (such as page starts, loaded status, synced JS bridges, and translation triggers). Operates in a thread-safe ring-buffer capping memory at the last 100 historical logs, with native options to view/clear logs dynamically via the main `DropdownMenu` ("View Diagnostic Logs") and a dedicated on/off toggle in Settings to protect user privacy.
 * **Hijacking Prevention Shield**: Prevents background or inactive tabs from hijacking active navigation hooks. Injected JavaScript page synchronization bridges are strictly restricted, validating tab associations only if `currentActiveTab?.id == tab.id`, preventing unwanted redirects, URL freezing, or random blank pages.
 * **Adaptive User-Agent Strings**: Handheld user-agent overrides utilize standard Android identifiers preventing modern servers from mistaking the internal WebKit as an unidentifiable automated robot client (eliminating infinite Cloudflare challenge loops).

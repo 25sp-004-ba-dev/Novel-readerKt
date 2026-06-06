@@ -184,13 +184,61 @@ class BrowserRepository(private val browserDao: BrowserDao) {
         }
     }
 
+    suspend fun updateNovelMetadata(url: String, novelTitle: String, chapterTitle: String, coverImage: String) {
+        val host = try { Uri.parse(url).host?.replace("www.", "")?.replace("translate.goog", "")?.trim('.') ?: "" } catch (e: Exception) { "" }
+        val allNovels = browserDao.getAllNovelBookmarks()
+        val existingNovelBookmark = allNovels.firstOrNull { bkmk ->
+            bkmk.domain == host && (bkmk.novelTitle == novelTitle || bkmk.url == url)
+        }
+        
+        if (existingNovelBookmark != null) {
+            val updated = existingNovelBookmark.copy(
+                novelTitle = novelTitle.ifEmpty { existingNovelBookmark.novelTitle },
+                lastViewedChapterTitle = chapterTitle.ifEmpty { existingNovelBookmark.lastViewedChapterTitle },
+                imageUrl = if (coverImage.isNotEmpty() && coverImage != "null") coverImage else existingNovelBookmark.imageUrl
+            )
+            browserDao.updateBookmark(updated)
+        }
+    }
+
     suspend fun updateReadingProgress(url: String, title: String) {
         val parsed = extractNovelAndChapter(title, url)
         val novelTitleVal = parsed.first
         if (novelTitleVal.isNotEmpty() && novelTitleVal != "Wtr-Lab Browser" && parsed.second != "Web Novel" && parsed.second != "Web Chapter") {
-            val existingNovelBookmark = browserDao.getNovelBookmark(novelTitleVal)
+            
+            // Try explicit title match
+            var existingNovelBookmark = browserDao.getNovelBookmark(novelTitleVal)
+            
+            // If explicit match fails, try path root matching for cases where title is translated vs untranslated
+            if (existingNovelBookmark == null) {
+                val host = try { Uri.parse(url).host?.replace("www.", "")?.replace("translate.goog", "")?.trim('.') ?: "" } catch (e: Exception) { "" }
+                val uriSegments = try { Uri.parse(url).pathSegments } catch (e: Exception) { emptyList() }
+                val urlPrefix = if (uriSegments.isNotEmpty()) uriSegments.firstOrNull() ?: "" else ""
+
+                if (host.isNotEmpty()) {
+                    val allNovels = browserDao.getAllNovelBookmarks()
+                    existingNovelBookmark = allNovels.firstOrNull { bkmk ->
+                        val safeNovelTitle = bkmk.novelTitle ?: ""
+                        bkmk.domain == host && (bkmk.url.contains(urlPrefix) || (safeNovelTitle.isNotEmpty() && url.contains(safeNovelTitle.take(5))) || bkmk.url == url)
+                    }
+                }
+            }
+
             if (existingNovelBookmark != null) {
+                val isTranslatedTitle = title.length > existingNovelBookmark.title.length || (novelTitleVal != existingNovelBookmark.novelTitle && !novelTitleVal.any { it in '\u4e00'..'\u9fa5' })
+                
+                var updateTitle = existingNovelBookmark.title
+                var updateNovelTitle = existingNovelBookmark.novelTitle
+                
+                // Save translated title properly if we detect it
+                if (isTranslatedTitle) {
+                    updateTitle = title
+                    updateNovelTitle = novelTitleVal
+                }
+
                 val updated = existingNovelBookmark.copy(
+                    title = updateTitle,
+                    novelTitle = updateNovelTitle,
                     lastViewedChapterUrl = url,
                     lastViewedChapterTitle = parsed.second
                 )

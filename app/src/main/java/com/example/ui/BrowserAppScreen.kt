@@ -82,7 +82,8 @@ fun isSameBaseOrTranslatedUrl(url1: String, url2: String): Boolean {
                 e.printStackTrace()
             }
         }
-        return cleanVal.split("?")[0].split("#")[0].trim('/')
+        val noPagination = cleanVal.replace(Regex("""_\d+\.html$"""), ".html")
+        return noPagination.split("?")[0].split("#")[0].trim('/')
     }
     return clean(url1) == clean(url2)
 }
@@ -109,7 +110,6 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
     var longPressedUrl by remember { mutableStateOf<String?>(null) }
     var isSearchFocused by remember { mutableStateOf(false) }
 
-    var showSettingsDialog by remember { mutableStateOf(false) }
     var showLogsDialog by remember { mutableStateOf(false) }
 
     val sharedPrefs = remember(context) { context.getSharedPreferences("wtr_browser_settings", android.content.Context.MODE_PRIVATE) }
@@ -126,6 +126,17 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
     var urlText by remember { mutableStateOf("") }
     var extractedUrlOfActiveTracks by remember { mutableStateOf("") }
 
+    val webViewsMap = remember { mutableStateMapOf<Long, WebView>() }
+
+    LaunchedEffect(Unit) {
+        WtrAudioControlBridge.onMetadataExtracted = { tabId, novelTitle, chapterTitle, coverImage ->
+            val url = webViewsMap[tabId]?.url
+            if (url != null) {
+                viewModel.updateNovelMetadata(url, novelTitle, chapterTitle, coverImage)
+            }
+        }
+    }
+
     LaunchedEffect(urlInput, isSearchFocused) {
         if (!isSearchFocused) {
             urlText = if (urlInput == "chrome//newtab" || urlInput == "chrome://newtab") "" else getCleanDisplayUrl(urlInput)
@@ -141,8 +152,6 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
     val keyboardController = LocalSoftwareKeyboardController.current
 
     // Maintain a map of dynamic WebViews keyed by Tab ID
-    val webViewsMap = remember { mutableStateMapOf<Long, WebView>() }
-
     var runHtmlTextExtractionAndPlayRef by remember { mutableStateOf<(() -> Unit)?>(null) }
 
     val translationAttempts = remember { mutableStateMapOf<String, Int>() }
@@ -463,12 +472,15 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                             if (window.speechSynthesis && window.speechSynthesis.paused) {
                                 window.speechSynthesis.resume();
                             }
-                            let playBtn = document.querySelector('button[aria-label*="Play"], button[title*="Play"], button[class*="play"], .play-btn, .btn-play, .play-pause-btn, .audio-player-button');
+                            let playBtn = document.querySelector('button[aria-label*="Play"], button[title*="Play"], button[class*="play"], .play-btn, .btn-play, .play-pause-btn, .audio-player-button, .audio-play, #play-button, .play-icon');
                             if (playBtn) {
                                 playBtn.click();
                             } else {
-                                let buttons = Array.from(document.querySelectorAll('button, a, span'));
-                                let target = buttons.find(b => b.innerText && (b.innerText.toLowerCase().includes('play') || b.innerText.toLowerCase().includes('listen') || b.innerText.toLowerCase().includes('tts')));
+                                let buttons = Array.from(document.querySelectorAll('button, a, span, div.play'));
+                                let target = buttons.find(b => {
+                                    let t = (b.innerText || b.textContent || '').toLowerCase();
+                                    return t.includes('play') || t.includes('listen') || t.includes('tts') || t.includes('开始朗读') || t.includes('播放');
+                                });
                                 if (target) target.click();
                             }
                         })();
@@ -526,14 +538,39 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                 activeWV.post {
                     activeWV.evaluateJavascript("""
                         (function() {
-                            let prevBtn = document.querySelector('.btn-prev, .prev, .prev-chapter, a[class*="prev"], button[class*="prev"]');
+                            function isDangerousOrToggle(el) {
+                                if (!el) return true;
+                                let tag = el.tagName.toLowerCase();
+                                if (tag === 'input' && (el.type === 'checkbox' || el.type === 'radio')) return true;
+                                return false;
+                            }
+
+                            let prevBtn = document.querySelector('.btn-prev, .prev, .prev-chapter, .prev_chap, .prev-page, a[class*="prev"], button[class*="prev"], a[id*="prev"], button[id*="prev"]');
                             if (prevBtn) {
                                 prevBtn.click();
+                                if (prevBtn.tagName.toLowerCase() === 'a') {
+                                    let href = prevBtn.getAttribute('href');
+                                    if (href && href !== '#' && !href.startsWith('javascript:')) {
+                                        if (href.startsWith('/')) href = window.location.origin + href;
+                                        window.location.href = href;
+                                    }
+                                }
                             } else {
-                                let links = Array.from(document.querySelectorAll('a, button'));
-                                let target = links.find(l => l.innerText && (l.innerText.toLowerCase().includes('prev') || l.innerText.toLowerCase().includes('previous') || l.innerText.toLowerCase().includes('previous chapter')));
+                                let links = Array.from(document.querySelectorAll('a, button font, a font'));
+                                let target = links.find(l => {
+                                    let txt = (l.innerText || l.textContent || '').toLowerCase();
+                                    return (txt.includes('prev') || txt.includes('previous') || txt.includes('上一章') || txt.includes('上一页')) && !isDangerousOrToggle(l);
+                                });
                                 if (target) {
-                                    target.click();
+                                    let actualEl = target.tagName.toLowerCase() === 'font' ? target.parentElement : target;
+                                    actualEl.click();
+                                    if (actualEl.tagName.toLowerCase() === 'a') {
+                                        let href = actualEl.getAttribute('href');
+                                        if (href && href !== '#' && !href.startsWith('javascript:')) {
+                                            if (href.startsWith('/')) href = window.location.origin + href;
+                                            window.location.href = href;
+                                        }
+                                    }
                                 } else {
                                     let currentUrl = window.location.href;
                                     let match = currentUrl.match(/chapter-(\d+)/);
@@ -610,7 +647,7 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                     val currentUrlLower = (webView.url ?: "").lowercase()
                     
                     var attempts = 0
-                    val maxAttempts = 80 // Poll up to 12-15 seconds for translation to finalize
+                    val maxAttempts = 35 // Wait up to 7 seconds for translation to finalize
                     var list = emptyList<String>()
                     var startIdx = 0
                     var extractionSuccess = false
@@ -628,11 +665,19 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                                             
                                             function isJunk(text) {
                                                 let t = text.toLowerCase().trim();
-                                                if (t.length < 5) return true;
+                                                if (t.length < 5) {
+                                                    // Allow short Chinese phrases that are clearly not junk
+                                                    if (/[\u4e00-\u9fa5]{2,}/.test(text) && t.length >= 2) {
+                                                        // Keep it if it's just characters
+                                                    } else {
+                                                        return true;
+                                                    }
+                                                }
                                                 if (t.includes("ad-blocker") || t.includes("adblocker") || t.includes("ad block") || t.includes("adblock") || t.includes("please disable") || t.includes("stop your ad blocker") || t.includes("ad blocker detected")) return true;
                                                 if (t.includes(".com") || t.includes(".org") || t.includes(".net") || t.includes(".me") || t.includes(".xyz")  || t.includes("http://") || t.includes("https://")) {
                                                     if (t.includes("novelbin") || t.includes("novelhall") || t.includes("freewebnovel") || t.includes("fanmtl") || t.includes("timotxt") || t.includes("novel543") || t.includes("twkan") || t.includes("novelhub") || t.includes("novelhubapp") || t.includes("webnovel")) {
-                                                        return true;
+                                                        // Only filter out if it's clearly a promotional link line
+                                                        if (t.length < 100) return true;
                                                     }
                                                 }
                                                 const promoKeywords = [
@@ -644,9 +689,10 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                                                     "previous chapter", "table of contents", "read online free", "read online for free",
                                                     "unlocked chapters", "bonus chapters", "sign up", "sign in", "subscribe to",
                                                     "follow my page", "download our app", "read this novel", "other novel", "like this book",
-                                                    "stop your ad blocker", "ad blocker detected"
+                                                    "stop your ad blocker", "ad blocker detected", "本章未完", "点击下一页", "继续阅读", "本章完", "（本章未完）", "(本章完)",
+                                                    "最新网址", "手机用户请浏览", "更多精彩内容", "投推荐票", "上一章", "下一章", "目录", "书架", "加入书架", "返回封面"
                                                 ];
-                                                if (t.length < 300) {
+                                                if (t.length < 250) {
                                                     for (let keyword of promoKeywords) {
                                                         if (t.includes(keyword)) return true;
                                                     }
@@ -657,21 +703,40 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                                             function prepareBrParagraphs(contentEl) {
                                                 if (!contentEl) return;
                                                 if (contentEl.querySelector('.wtr-line-segment') || contentEl.querySelector('.wtr-focus-highlight')) return;
-                                                let pTags = contentEl.querySelectorAll('p');
-                                                if (pTags.length > 5) return; 
                                                 
-                                                let html = contentEl.innerHTML;
-                                                let parts = html.split(/<br\s*\/?>/i);
-                                                let newParts = parts.map(part => {
-                                                    let trimmed = part.replace(/<[^>]+>/g, '').trim();
-                                                    if (trimmed.length > 5) {
-                                                        if (!part.trim().startsWith('<span class="wtr-line-segment"')) {
-                                                            return '<span class="wtr-line-segment">' + part + '</span>';
+                                                // Save original children to work with them
+                                                let children = Array.from(contentEl.childNodes);
+                                                let newHtml = "";
+                                                let currentGroup = "";
+
+                                                children.forEach(node => {
+                                                    if (node.nodeType === 3) { // Text node
+                                                        currentGroup += node.textContent;
+                                                    } else if (node.nodeType === 1) { // Element node
+                                                        if (node.tagName.toLowerCase() === 'br') {
+                                                            if (currentGroup.trim().length > 0) {
+                                                                newHtml += '<span class="wtr-line-segment">' + currentGroup.trim() + '</span><br>';
+                                                                currentGroup = "";
+                                                            }
+                                                        } else if (node.tagName.toLowerCase() === 'p') {
+                                                             if (currentGroup.trim().length > 0) {
+                                                                newHtml += '<span class="wtr-line-segment">' + currentGroup.trim() + '</span>';
+                                                                currentGroup = "";
+                                                            }
+                                                            newHtml += node.outerHTML;
+                                                        } else {
+                                                            currentGroup += node.outerHTML;
                                                         }
                                                     }
-                                                    return part;
                                                 });
-                                                contentEl.innerHTML = newParts.join('<br>');
+                                                
+                                                if (currentGroup.trim().length > 0) {
+                                                    newHtml += '<span class="wtr-line-segment">' + currentGroup.trim() + '</span>';
+                                                }
+                                                
+                                                if (newHtml.length > 10) {
+                                                    contentEl.innerHTML = newHtml;
+                                                }
                                             }
 
                                             let containers = [];
@@ -694,10 +759,13 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                                                 let el = document.querySelector('.read-content') || document.querySelector('#content') || document.querySelector('.wtr-reader-content') || document.querySelector('.chapter-content') || document.body;
                                                 if (el) containers.push(el);
                                             } else if (host.includes("timotxt") || host.includes("novel543")) {
-                                                let el = document.querySelector('.read-content') || document.querySelector('#content') || document.querySelector('.show_txt') || document.querySelector('.content');
+                                                let el = document.querySelector('.read-content') || document.querySelector('#content') || document.querySelector('.show_txt') || document.querySelector('.content') || document.querySelector('.txtnav') || document.querySelector('.chapter-content') || document.querySelector('.article-content');
                                                 if (el) containers.push(el);
                                             } else if (host.includes("twkan")) {
-                                                let el = document.querySelector('#htmlContent') || document.querySelector('#content') || document.querySelector('.active') || document.querySelector('.read-content');
+                                                let el = document.querySelector('#htmlContent') || document.querySelector('#content') || document.querySelector('.active') || document.querySelector('.read-content') || document.querySelector('.article-content');
+                                                if (el) containers.push(el);
+                                            } else if (host.includes("novelhub")) {
+                                                let el = document.querySelector('#chr-content') || document.querySelector('.chapter-content') || document.querySelector('.read-content') || document.querySelector('.entry-content') || document.querySelector('.reader-content') || document.querySelector('main article');
                                                 if (el) containers.push(el);
                                             }
 
@@ -711,7 +779,7 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                                                     let pTags = rawPTags.filter(p => !rawPTags.some(parent => parent !== p && parent.contains(p)));
                                                     
                                                     pTags.forEach(p => {
-                                                        let excludeClass = '.author-note, .gift-box, .recommend-box, .comment-area, .m-comment, .user-opinion, .review-item, .j_recommendation, .book-recommend, .cha-nav, .chapter-control, .nav, .nav-btn, .next_chap, .prev_chap, .next-page, .prev-page, .ads, .adsbygoogle, .btn-group, .custom-control, .category, .desc, .title-book, .chapter-nav';
+                                                        let excludeClass = '.author-note, .gift-box, .recommend-box, .comment-area, .m-comment, .user-opinion, .review-item, .j_recommendation, .book-recommend, .cha-nav, .chapter-control, .nav, .nav-btn, .next_chap, .prev_chap, .next-page, .prev-page, .ads, .adsbygoogle, .btn-group, .custom-control, .category, .desc, .title-book, .chapter-nav, .bottem, .bottem1, .bottem2, .txtnav, .readnav, .headnav, .footer, .header, #header, #footer';
                                                         if (!p.closest(excludeClass)) {
                                                             let text = p.innerText.trim();
                                                             if (text.length > 5 && !isJunk(text)) {
@@ -820,25 +888,31 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                                 val isProxyTranslation = currentUrlLower.contains("translate.goog") || currentUrlLower.contains("translate.google")
                                 fun isPageMostlyTranslatingOrChinese(paragraphs: List<String>): Boolean {
                                     if (paragraphs.isEmpty()) return false
+                                    if (attempts > 15) return false // After 3 seconds, stop forcing translation check if we have text
                                     var chineseCount = 0
                                     var englishCount = 0
-                                    val sample = paragraphs.take(5)
+                                    val sample = paragraphs.take(10)
                                     for (p in sample) {
                                         for (c in p) {
                                             if (c in '\u4e00'..'\u9fa5') {
                                                 chineseCount++
-                                            } else if (c.isLetter() && c.code < 128) {
+                                            } else if (c.isLetter() && (c.code < 128 || c in '\u00C0'..'\u00FF')) {
                                                 englishCount++
                                             }
                                         }
                                     }
-                                    return chineseCount > 0 && englishCount < chineseCount
+                                    // If we have very little text overall, don't claim it's Chinese-heavy yet
+                                    if (chineseCount + englishCount < 20) return false
+                                    return chineseCount > 5 && englishCount < (chineseCount * 0.4)
                                 }
                                 val isChinesePresent = isPageMostlyTranslatingOrChinese(temp)
                                 
-                                if (isProxyTranslation && isChinesePresent && attempts < maxAttempts - 1) {
+                                if (temp.isEmpty() && attempts < maxAttempts - 1) {
                                     attempts++
-                                    delay(200) // Fast 200ms sleep wait
+                                    delay(200)
+                                } else if (isProxyTranslation && isChinesePresent && attempts < maxAttempts - 1) {
+                                    attempts++
+                                    delay(250) // Wait for translation overlay
                                 } else {
                                     list = temp
                                     startIdx = bestIndex
@@ -980,30 +1054,53 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                             return true;
                         }
                         
+                        if (host.includes("timotxt") || host.includes("novel543") || host.includes("twkan")) {
+                            let nextElements = Array.from(document.querySelectorAll('a, button'));
+                            let target = nextElements.find(el => {
+                                let t = (el.innerText || el.textContent || '').trim();
+                                if (t === '下一页' || t === '下一章' || t === '下一頁' || t.includes('Next Chapter') || t.includes('Next Page')) {
+                                     return !isDangerousOrToggle(el);
+                                }
+                                return false;
+                            });
+                            if (target) {
+                                target.click();
+                                if (target.tagName.toLowerCase() === 'a') {
+                                    let href = target.getAttribute('href');
+                                    if (href && href !== '#' && !href.startsWith('javascript:')) {
+                                        if (href.startsWith('/')) href = window.location.origin + href;
+                                        window.location.href = href;
+                                    }
+                                }
+                                return true;
+                            }
+                        }
+                        
                         // General case
-                        let nextElements = Array.from(document.querySelectorAll('.btn-next, .next, .next-chapter, .next_chap, a[class*="next"], button[class*="next"]'));
+                        let nextElements = Array.from(document.querySelectorAll('.btn-next, .next, .next-chapter, .next_chap, .next-page, a[class*="next"], button[class*="next"], a[id*="next"], button[id*="next"]'));
                         let safeNext = nextElements.find(el => !isDangerousOrToggle(el));
                         if (safeNext) {
                             safeNext.click();
                             if (safeNext.tagName.toLowerCase() === 'a') {
                                 let href = safeNext.getAttribute('href');
-                                if (href) {
+                                if (href && href !== '#' && !href.startsWith('javascript:')) {
                                     if (href.startsWith('/')) href = window.location.origin + href;
                                     window.location.href = href;
                                 }
                             }
                             return true;
                         } else {
-                            let linksAndButtons = Array.from(document.querySelectorAll('a, button'));
+                            let linksAndButtons = Array.from(document.querySelectorAll('a, button font, a font'));
                             let target = linksAndButtons.find(l => {
                                 let txt = (l.innerText || l.textContent || '').toLowerCase();
-                                return (txt.includes('next') || txt.includes('next chapter')) && !isDangerousOrToggle(l);
+                                return (txt.includes('next') || txt.includes('next chapter') || txt.includes('下一章') || txt.includes('下一页')) && !isDangerousOrToggle(l);
                             });
                             if (target) {
-                                target.click();
-                                if (target.tagName.toLowerCase() === 'a') {
-                                    let href = target.getAttribute('href');
-                                    if (href) {
+                                let actualEl = target.tagName.toLowerCase() === 'font' ? target.parentElement : target;
+                                actualEl.click();
+                                if (actualEl.tagName.toLowerCase() === 'a') {
+                                    let href = actualEl.getAttribute('href');
+                                    if (href && href !== '#' && !href.startsWith('javascript:')) {
                                         if (href.startsWith('/')) href = window.location.origin + href;
                                         window.location.href = href;
                                     }
@@ -1684,34 +1781,67 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                                                     wv.evaluateJavascript(
                                                         """
                                                         (function() {
+                                                            let cover = '';
                                                             let meta = document.querySelector('meta[property="og:image"]');
-                                                            if (meta && meta.content) return meta.content;
+                                                            if (meta && meta.content) cover = meta.content;
                                                             
-                                                            let twitter = document.querySelector('meta[name="twitter:image"]');
-                                                            if (twitter && twitter.content) return twitter.content;
+                                                            if (!cover) {
+                                                                let twitter = document.querySelector('meta[name="twitter:image"]');
+                                                                if (twitter && twitter.content) cover = twitter.content;
+                                                            }
 
-                                                            let linkSrc = document.querySelector('link[rel="image_src"]');
-                                                            if (linkSrc && linkSrc.href) return linkSrc.href;
+                                                            if (!cover) {
+                                                                let linkSrc = document.querySelector('link[rel="image_src"]');
+                                                                if (linkSrc && linkSrc.href) cover = linkSrc.href;
+                                                            }
                                                             
-                                                            let img = document.querySelector('.book-cover img, .cover img, .novel-cover img, img.cover, .cover-box img, .pic img, img.book-img');
-                                                            if (img && img.src) return img.src;
+                                                            if (!cover) {
+                                                                let img = document.querySelector('.book-cover img, .cover img, .novel-cover img, img.cover, .cover-box img, .pic img, img.book-img');
+                                                                if (img && img.src) cover = img.src;
+                                                            }
 
-                                                            let allImgs = Array.from(document.querySelectorAll('img'));
-                                                            for (let im of allImgs) {
-                                                                if (im.src && (im.src.includes('cover') || im.className.includes('cover') || im.id.includes('cover'))) {
-                                                                    return im.src;
+                                                            if (!cover) {
+                                                                let allImgs = Array.from(document.querySelectorAll('img'));
+                                                                for (let im of allImgs) {
+                                                                    if (im.src && (im.src.includes('cover') || im.className.includes('cover') || im.id.includes('cover'))) {
+                                                                        cover = im.src;
+                                                                        break;
+                                                                    }
                                                                 }
                                                             }
-                                                            return '';
+                                                            
+                                                            let dynTitle = document.title || "";
+                                                            let h1 = document.querySelector('h1.title, h1.book-title, .novel-title');
+                                                            if (h1 && h1.innerText && h1.innerText.length > 0) {
+                                                                dynTitle = h1.innerText.trim();
+                                                            }
+
+                                                            return JSON.stringify({
+                                                                cover: cover,
+                                                                title: dynTitle
+                                                            });
                                                         })()
                                                         """.trimIndent()
                                                     ) { res: String? ->
-                                                        var coverUrl = res ?: ""
-                                                        if (coverUrl.startsWith("\"") && coverUrl.endsWith("\"") && coverUrl.length >= 2) {
-                                                             coverUrl = coverUrl.substring(1, coverUrl.length - 1)
+                                                        var coverUrl: String? = null
+                                                        var currentTitle = tab.title
+                                                        
+                                                        try {
+                                                            val jsonStr = if (res?.startsWith("\"") == true && res.endsWith("\"")) res.substring(1, res.length - 1).replace("\\\"", "\"").replace("\\\\", "\\") else res
+                                                            if (!jsonStr.isNullOrEmpty() && jsonStr != "null") {
+                                                                val json = org.json.JSONObject(jsonStr)
+                                                                coverUrl = json.optString("cover", "")
+                                                                val extractedTitle = json.optString("title", "")
+                                                                if (extractedTitle.isNotEmpty()) {
+                                                                    currentTitle = extractedTitle
+                                                                }
+                                                            }
+                                                        } catch (e: Exception) {
+                                                            e.printStackTrace()
                                                         }
-                                                        val finalUrl = if (coverUrl.isEmpty() || coverUrl == "null") null else coverUrl
-                                                        viewModel.toggleBookmark(tab.url, tab.title, finalUrl)
+                                                        
+                                                        val finalUrl = if (coverUrl.isNullOrEmpty() || coverUrl == "null") null else coverUrl
+                                                        viewModel.toggleBookmark(tab.url, currentTitle, finalUrl)
                                                     }
                                                 } else {
                                                     viewModel.toggleBookmark(tab.url, tab.title)
@@ -1818,7 +1948,7 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                                     text = { Text("Browser & Reader Settings") },
                                     leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) },
                                     onClick = {
-                                        showSettingsDialog = true
+                                        currentSection = BrowserSection.SETTINGS
                                         showMenu = false
                                     }
                                 )
@@ -2325,11 +2455,16 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                 )
             }
 
-            // Settings Overlays Trigger
-            if (showSettingsDialog) {
-                SettingsDialog(
+            // Settings Overlay panel
+            AnimatedVisibility(
+                visible = currentSection == BrowserSection.SETTINGS,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically(),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                SettingsPanel(
                     onDismissRequest = { 
-                        showSettingsDialog = false 
+                        currentSection = BrowserSection.WEB
                         // Sync preference values immediately upon settings closing to update our active components state dynamically
                         enableWebTrackplayer = sharedPrefs.getBoolean("enable_web_trackplayer", false)
                         forceDarkContent = sharedPrefs.getBoolean("force_dark_content", false)
@@ -2653,6 +2788,7 @@ private fun extractNovelAndChapter(title: String, url: String): Pair<String, Str
         .replace(" - twkan.com", "", ignoreCase = true)
         .replace(" - novelhub.net", "", ignoreCase = true)
         .replace(" - novelhubapp.com", "", ignoreCase = true)
+        .replace(Regex("""_\d+\.html"""), ".html")
         .trim()
         
     if (cleanTitle.startsWith("《") && cleanTitle.endsWith("》")) {

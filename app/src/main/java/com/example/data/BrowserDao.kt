@@ -37,6 +37,9 @@ interface BrowserDao {
     @Query("SELECT * FROM bookmarks WHERE isNovel = 1 AND novelTitle = :novelTitle LIMIT 1")
     suspend fun getNovelBookmark(novelTitle: String): BookmarkEntry?
 
+    @Query("SELECT * FROM bookmarks WHERE isNovel = 1")
+    suspend fun getAllNovelBookmarks(): List<BookmarkEntry>
+
     @Query("DELETE FROM bookmarks WHERE id = :id")
     suspend fun deleteBookmark(id: Long)
 

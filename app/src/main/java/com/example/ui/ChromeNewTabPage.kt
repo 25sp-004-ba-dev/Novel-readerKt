@@ -300,125 +300,67 @@ fun ChromeNewTabPage(
                     }
                 }
 
-                // Others in 2-column Grid
+                // Others in a compact vertical list
                 val otherSitelist = shortcuts.drop(1)
                 Column(
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    for (i in otherSitelist.indices step 2) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            modifier = Modifier.fillMaxWidth()
+                    otherSitelist.forEach { site ->
+                        Card(
+                            onClick = { onNavigate(site.url) },
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("featured_${site.title.lowercase()}_card")
                         ) {
-                            // Left item
-                            val left = otherSitelist[i]
-                            Card(
-                                onClick = { onNavigate(left.url) },
-                                shape = RoundedCornerShape(12.dp),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                                ),
+                            Row(
                                 modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("featured_${left.title.lowercase()}_card")
+                                    .fillMaxWidth()
+                                    .padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                Row(
+                                Box(
                                     modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                        .size(40.dp)
+                                        .clip(CircleShape)
+                                        .background(site.color.copy(alpha = 0.2f)),
+                                    contentAlignment = Alignment.Center
                                 ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(36.dp)
-                                            .clip(CircleShape)
-                                            .background(left.color.copy(alpha = 0.2f)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = left.title.take(1).uppercase(),
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 16.sp,
-                                            color = left.color
-                                        )
-                                    }
-                                    Column {
-                                        Text(
-                                            text = left.title,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 13.sp,
-                                            color = MaterialTheme.colorScheme.onSurface,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            text = left.subtitle,
-                                            fontSize = 11.sp,
-                                            color = MaterialTheme.colorScheme.outline,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
+                                    Text(
+                                        text = site.title.take(1).uppercase(),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 18.sp,
+                                        color = site.color
+                                    )
                                 }
-                            }
-
-                            // Right item (if index exists)
-                            if (i + 1 < otherSitelist.size) {
-                                val right = otherSitelist[i + 1]
-                                Card(
-                                    onClick = { onNavigate(right.url) },
-                                    shape = RoundedCornerShape(12.dp),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                                    ),
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .testTag("featured_${right.title.lowercase()}_card")
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(12.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(36.dp)
-                                                .clip(CircleShape)
-                                                .background(right.color.copy(alpha = 0.2f)),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Text(
-                                                text = right.title.take(1).uppercase(),
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 16.sp,
-                                                color = right.color
-                                            )
-                                        }
-                                        Column {
-                                            Text(
-                                                text = right.title,
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 13.sp,
-                                                color = MaterialTheme.colorScheme.onSurface,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                            Text(
-                                                text = right.subtitle,
-                                                fontSize = 11.sp,
-                                                color = MaterialTheme.colorScheme.outline,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                        }
-                                    }
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = site.title,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = site.subtitle,
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme. outline,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
                                 }
-                            } else {
-                                Spacer(modifier = Modifier.weight(1f))
+                                Icon(
+                                    imageVector = Icons.Default.Launch,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f),
+                                    modifier = Modifier.size(18.dp)
+                                )
                             }
                         }
                     }

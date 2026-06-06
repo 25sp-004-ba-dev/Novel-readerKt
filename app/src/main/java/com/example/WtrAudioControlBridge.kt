@@ -83,6 +83,9 @@ object WtrAudioControlBridge {
     // Connection check - ensures foreground service is listening
     var onStateChangedCallback: (() -> Unit)? = null
 
+    // Callback when JS extracts metadata like cover image and title
+    var onMetadataExtracted: ((tabId: Long, novelTitle: String, chapterTitle: String, coverImage: String) -> Unit)? = null
+
     // TTS actions routed to foreground service
     var onSpeakNative: ((text: String, rate: Float, pitch: Float, lang: String) -> Unit)? = null
     var onCancelNative: (() -> Unit)? = null

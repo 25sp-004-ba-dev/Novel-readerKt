@@ -241,6 +241,12 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     }
 
     // Bookmarks
+    fun updateNovelMetadata(url: String, novelTitle: String, chapterTitle: String, coverImage: String) {
+        viewModelScope.launch {
+            repository.updateNovelMetadata(url, novelTitle, chapterTitle, coverImage)
+        }
+    }
+
     fun toggleBookmark(url: String, title: String, imageUrl: String? = null) {
         viewModelScope.launch {
             val isBookmarkedFlow = repository.isBookmarked(url)

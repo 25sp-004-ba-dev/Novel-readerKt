@@ -56,15 +56,18 @@ object WtrLogManager {
             
             mainHandler.post {
                 _logs.add(0, formatted)
-                while (_logs.size > 100) {
+                if (_logs.size > 100) {
                     _logs.removeAt(_logs.size - 1)
                 }
                 
+                // Persistence moved to background or disabled on every log to prevent jank
+                /*
                 context?.let { ctx ->
                     val serialized = _logs.joinToString("||LC||")
                     val sharedPrefs = ctx.getSharedPreferences("wtr_browser_settings", Context.MODE_PRIVATE)
                     sharedPrefs.edit().putString("saved_logs_serialized", serialized).apply()
                 }
+                */
             }
         }
     }

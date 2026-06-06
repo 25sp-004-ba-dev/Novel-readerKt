@@ -19,6 +19,7 @@ import androidx.core.app.NotificationCompat
 import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class WtrBrowserService : Service() {
@@ -42,6 +43,9 @@ class WtrBrowserService : Service() {
     private var currentSpeechPitch: Float = 1.0f
     private var currentSpeechLang: String = "en-US"
     private var lastWordIndex: Int = 0
+
+    // Coroutine scope for service tasks
+    private val serviceScope = CoroutineScope(Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
 
     // Coroutine job to debounce state transitions during fast paragraph switching
     private var cancelJob: kotlinx.coroutines.Job? = null
@@ -214,9 +218,9 @@ class WtrBrowserService : Service() {
                     android.os.Handler(android.os.Looper.getMainLooper()).post {
                         webviewSpeechTimeoutHandler.removeCallbacks(webviewSpeechTimeoutRunnable)
                         if (isBackupTakeoverActive) {
-                            webviewSpeechTimeoutHandler.postDelayed(webviewSpeechTimeoutRunnable, 50L)
+                            webviewSpeechTimeoutHandler.postDelayed(webviewSpeechTimeoutRunnable, 100L)
                         } else {
-                            webviewSpeechTimeoutHandler.postDelayed(webviewSpeechTimeoutRunnable, 1500L)
+                            webviewSpeechTimeoutHandler.postDelayed(webviewSpeechTimeoutRunnable, 3000L)
                         }
                     }
                     WtrAudioControlBridge.onTtsDone?.invoke()
@@ -253,6 +257,9 @@ class WtrBrowserService : Service() {
 
         // Cancel any pending pause/stopped state update so we transition seamlessly
         cancelJob?.cancel()
+        cancelJob = serviceScope.launch {
+            delay(100L) // Subtle debounce
+        }
 
         currentSpeechText = text
         currentSpeechRate = WtrAudioControlBridge.ttsSpeed.value

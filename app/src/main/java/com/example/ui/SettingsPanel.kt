@@ -31,7 +31,7 @@ import com.example.BrowserViewModel
 import com.example.WtrAudioControlBridge
 
 @Composable
-fun SettingsDialog(
+fun SettingsPanel(
     onDismissRequest: () -> Unit,
     viewModel: BrowserViewModel,
     onThemeChanged: (String) -> Unit,
@@ -110,9 +110,17 @@ fun SettingsDialog(
     val availableVoices by WtrAudioControlBridge.availableVoices.collectAsStateWithLifecycle()
     val searchEngineUrl by viewModel.searchEngine.collectAsStateWithLifecycle()
 
-    AlertDialog(
-        onDismissRequest = onDismissRequest,
-        title = {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -135,25 +143,31 @@ fun SettingsDialog(
                     Text(
                         text = "Settings & Profiles",
                         fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp,
-                        color = MaterialTheme.colorScheme.onSurface
+                        fontSize = 20.sp,
+                        color = MaterialTheme.colorScheme.onBackground
                     )
                     Text(
                         text = "Personalize Novel Reader",
-                        fontSize = 11.sp,
+                        fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.outline
                     )
                 }
             }
-        },
-        text = {
-            Column(
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .padding(vertical = 4.dp)
-            ) {
+            IconButton(onClick = onDismissRequest) {
+                Icon(imageVector = Icons.Default.Close, contentDescription = "Close Settings")
+            }
+        }
+        
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Column(
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(vertical = 4.dp)
+        ) {
                 // SECTION 1: THEME & VISUAL PAIRINGS
                 Card(
                     colors = CardDefaults.cardColors(
@@ -1041,14 +1055,5 @@ fun SettingsDialog(
                     }
                 }
             }
-        },
-        confirmButton = {
-            Button(
-                onClick = onDismissRequest,
-                shape = RoundedCornerShape(10.dp)
-            ) {
-                Text("Apply Settings", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            }
         }
-    )
-}
+    }
