@@ -34,10 +34,14 @@ class MainActivity : ComponentActivity() {
 
         // Start Foreground Service to manage Media Session right away
         val serviceIntent = Intent(this, WtrBrowserService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent)
-        } else {
-            startService(serviceIntent)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent)
+            } else {
+                startService(serviceIntent)
+            }
+        } catch (e: Exception) {
+            WtrLogManager.log(this, "Failed to start WtrBrowserService: ${e.message}")
         }
 
         setContent {

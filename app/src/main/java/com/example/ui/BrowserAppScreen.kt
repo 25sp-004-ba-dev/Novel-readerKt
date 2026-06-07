@@ -103,6 +103,10 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
         viewModel.isUrlBookmarked(it.url).collectAsStateWithLifecycle(initialValue = false) 
     } ?: remember { mutableStateOf(false) }
 
+    LaunchedEffect(activeTab) {
+        WtrAudioControlBridge.setCurrentlyActiveTabId(activeTab?.id)
+    }
+
     var currentSection by remember { mutableStateOf(BrowserSection.WEB) }
     var webProgress by remember { mutableIntStateOf(100) }
     var isWebLoading by remember { mutableStateOf(false) }

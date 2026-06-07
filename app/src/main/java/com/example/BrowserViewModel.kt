@@ -359,9 +359,13 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                     writer.write(json.toString(2))
                     writer.flush()
                 }
-                onSuccess()
+                withContext(Dispatchers.Main) {
+                    onSuccess()
+                }
             } catch (e: Exception) {
-                onError(e)
+                withContext(Dispatchers.Main) {
+                    onError(e)
+                }
             }
         }
     }
@@ -455,21 +459,27 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                             currentTabToLoad = entry.copy(id = newId)
                         }
                     }
-                    if (currentTabToLoad != null) {
-                        _currentTab.value = currentTabToLoad
-                        _currentUrlInput.value = currentTabToLoad.url
-                    } else {
-                        val allRestored = dao.getAllTabs()
-                        if (allRestored.isNotEmpty()) {
-                            val target = allRestored.first()
-                            _currentTab.value = target
-                            _currentUrlInput.value = target.url
+                    withContext(Dispatchers.Main) {
+                        if (currentTabToLoad != null) {
+                            _currentTab.value = currentTabToLoad
+                            _currentUrlInput.value = currentTabToLoad.url
+                        } else {
+                            val allRestored = dao.getAllTabs()
+                            if (allRestored.isNotEmpty()) {
+                                val target = allRestored.first()
+                                _currentTab.value = target
+                                _currentUrlInput.value = target.url
+                            }
                         }
                     }
                 }
-                onSuccess()
+                withContext(Dispatchers.Main) {
+                    onSuccess()
+                }
             } catch (e: Exception) {
-                onError(e)
+                withContext(Dispatchers.Main) {
+                    onError(e)
+                }
             }
         }
     }

@@ -9,7 +9,9 @@ class WtrWebAppInterface(
 ) {
     @JavascriptInterface
     fun syncUrl(url: String, title: String) {
-        onUrlSynced(url, title)
+        if (WtrAudioControlBridge.currentlyActiveTabId.value == tabId) {
+            onUrlSynced(url, title)
+        }
     }
 
     @JavascriptInterface

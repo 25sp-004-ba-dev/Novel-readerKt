@@ -60,11 +60,14 @@ object WtrLogManager {
                     _logs.removeAt(_logs.size - 1)
                 }
                 
-                // Persist logs in the background using apply()
+                // Persist logs in the background thread instead of UI handler block
                 context?.let { ctx ->
-                    val serialized = _logs.joinToString("||LC||")
-                    val sharedPrefs = ctx.getSharedPreferences("wtr_browser_settings", Context.MODE_PRIVATE)
-                    sharedPrefs.edit().putString("saved_logs_serialized", serialized).apply()
+                    val logsCopy = _logs.toList()
+                    Thread {
+                        val serialized = logsCopy.joinToString("||LC||")
+                        val sharedPrefs = ctx.getSharedPreferences("wtr_browser_settings", Context.MODE_PRIVATE)
+                        sharedPrefs.edit().putString("saved_logs_serialized", serialized).apply()
+                    }.start()
                 }
             }
         }

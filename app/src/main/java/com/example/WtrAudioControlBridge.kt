@@ -108,12 +108,19 @@ object WtrAudioControlBridge {
     private val _activeTtsTabId = MutableStateFlow<Long?>(null)
     val activeTtsTabId: StateFlow<Long?> = _activeTtsTabId
 
+    private val _currentlyActiveTabId = MutableStateFlow<Long?>(null)
+    val currentlyActiveTabId: StateFlow<Long?> = _currentlyActiveTabId
+
     fun setActiveTtsTabId(id: Long?) {
         _activeTtsTabId.value = id
     }
 
+    fun setCurrentlyActiveTabId(id: Long?) {
+        _currentlyActiveTabId.value = id
+    }
+
     fun setWebSpeakNativeFallbackList(list: List<String>) {
-        _webSpeakNativeFallbackList.value = if (list.size > 500) list.take(500) else list
+        _webSpeakNativeFallbackList.value = if (list.size > 300) list.take(300) else list
     }
 
     fun setWebSpeakNativeFallbackIndex(index: Int) {
@@ -152,7 +159,7 @@ object WtrAudioControlBridge {
     }
 
     fun setPlayTrackInputList(list: List<String>) {
-        _playTrackInputList.value = if (list.size > 500) list.take(500) else list
+        _playTrackInputList.value = if (list.size > 300) list.take(300) else list
     }
 
     fun setCurrentTrackIndex(index: Int) {
