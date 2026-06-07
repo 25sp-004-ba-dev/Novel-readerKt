@@ -9,6 +9,8 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -115,6 +117,22 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
     var isSearchFocused by remember { mutableStateOf(false) }
 
     var showLogsDialog by remember { mutableStateOf(false) }
+
+    val saveLogsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/plain")
+    ) { uri ->
+        if (uri != null) {
+            try {
+                context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                    val logsText = com.example.WtrLogManager.logs.joinToString("\n")
+                    outputStream.write(logsText.toByteArray(Charsets.UTF_8))
+                }
+                android.widget.Toast.makeText(context, "Diagnostic logs saved successfully!", android.widget.Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                android.widget.Toast.makeText(context, "Failed to save logs: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     val sharedPrefs = remember(context) { context.getSharedPreferences("wtr_browser_settings", android.content.Context.MODE_PRIVATE) }
     var enableWebTrackplayer by remember { mutableStateOf(sharedPrefs.getBoolean("enable_web_trackplayer", false)) }
@@ -1419,7 +1437,17 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
     // Register decoupled background-safe callbacks
     LaunchedEffect(Unit) {
         WtrAudioControlBridge.nextChapterAction = {
-            currentTriggerNextChapter()
+            val currentUrl = viewModel.currentTab.value?.url ?: ""
+            val isTranslated = currentUrl.contains("translate.goog") || currentUrl.contains("translate.google")
+            if (isTranslated) {
+                com.example.WtrLogManager.log(context, "Anti-CAPTCHA Delay: Pausing 4.5s before loading next translated chapter.")
+                android.widget.Toast.makeText(context, "Auto-Next: Pausing 4.5s to bypass Google CAPTCHA filters...", android.widget.Toast.LENGTH_SHORT).show()
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    currentTriggerNextChapter()
+                }, 4500)
+            } else {
+                currentTriggerNextChapter()
+            }
         }
     }
 
@@ -2603,12 +2631,21 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                         }
                     },
                     dismissButton = {
-                        TextButton(
-                            onClick = { 
-                                com.example.WtrLogManager.clear(context)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(
+                                onClick = {
+                                    saveLogsLauncher.launch("wtr_diagnostic_logs.txt")
+                                }
+                            ) {
+                                Text("Save as TXT", color = MaterialTheme.colorScheme.primary)
                             }
-                        ) {
-                            Text("Clear Logs", color = MaterialTheme.colorScheme.error)
+                            TextButton(
+                                onClick = { 
+                                    com.example.WtrLogManager.clear(context)
+                                }
+                            ) {
+                                Text("Clear Logs", color = MaterialTheme.colorScheme.error)
+                            }
                         }
                     }
                 )

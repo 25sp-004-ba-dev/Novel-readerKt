@@ -12,6 +12,7 @@ For deep architectural and implementation details, refer to the following guides
 - [📱 Core Engine Manual](docs/CORE_ENGINE.md): Detailed internals of background services, bridges, and logging.
 - [🎨 UI Subsystem Guide](docs/UI_LAYER.md): Compose layouts, injected styles, and scraper logic documentation.
 - [🗄️ Data Layer Schema](docs/DATA_LAYER.md): Room database entities, serialization, and backup/restore procedures.
+- [🛠️ Complete Fixes Log](docs/fixes.md): Extensive historical bug-fixes log, crash preventions, safe stream allocations, and Google Translate anti-challenge delays.
 - [🧭 Agent Onboarding (AGENTS.md)](AGENTS.md): Critical rules, defect history, and operational memory for developers.
 
 ---

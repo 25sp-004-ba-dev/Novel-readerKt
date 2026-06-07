@@ -5,141 +5,146 @@ This document details the mechanics of Wtr-Lab's core JVM subsystems, detailing 
 
 ---
 
-## 📱 MainActivity.kt (The Bootloader)
+## 📱 Detailed Component and Class Directory
 
-- **Namespace**: `com.example`
-- **Inheritance**: `androidx.activity.ComponentActivity`
+Below is the exhaustive architectural documentation of every core native class inside the `com.example` namespace.
 
-### 1. Responsibilities
-- Bootstraps the application, hooks Jetpack Compose content view via `setContent`.
-- Integrates Edge-to-Edge display elements `enableEdgeToEdge()`.
-- Controls runtime permission grants (e.g., `POST_NOTIFICATIONS` for Android 13+ foreground services).
-- Initializes the concurrent **Active WebView Pooling Pool** (`MainActivity.activeWebViewsPool`) inside global memory to avoid activity-context memory leaks across dynamic swaps.
+---
 
-### 2. Interface Definitions and Memory Pool
-```kotlin
-companion object {
-    // Stores in-memory WebViews bound to applicationContext to prevent context leaks
-    val activeWebViewsPool = mutableMapOf<Int, android.webkit.WebView>()
-}
+### 1. Main Entry & Bootloader: `MainActivity.kt`
+* **Purpose**: Performs primary boot initialization, constructs the Jetpack Compose Material 3 UI container, controls runtime permissions, and acts as the lifecycle owner.
+* **Namespace**: `com.example`
+* **Inheritance**: `androidx.activity.ComponentActivity`
+* **Key Fields & States**:
+  * `permissionsGranted`: Compose mutable state flag indicating if system-level notifications are authorized.
+  * `activeWebViewsPool` (Static Companion): Static memory cache to persist WebViews globally across layout transformations to eliminate WebKit context memory leaks.
+* **Child Components & Associated Closures**:
+  * `MainActivity.Companion.activeWebViewsPool`: `MutableMap<Long, WebView>`. In-memory pool binding WebView instances directly to the `applicationContext` of the device. This ensures background tabs can load pages without leaking Activity contexts.
+  * `permissionRequestLauncher`: ActivityResultLauncher handling notifications permission checks.
+
+---
+
+### 2. Tab States & Central Logic Broker: `BrowserViewModel.kt`
+* **Purpose**: Coordinates application states, tab collections, bookmarks, history entries, custom URL sanitizations, and JSON backup/restore flows.
+* **Namespace**: `com.example`
+* **Inheritance**: `androidx.lifecycle.AndroidViewModel` (initialized using `Application` contexts to persist state safely across activity destructions)
+* **Key Fields & States**:
+  * `_currentTab`: `MutableStateFlow<TabEntry?>`. Source of truth for the active viewport tab.
+  * `allTabs`: `StateFlow<List<TabEntry>>`. Live feed of all opened tabs.
+  * `allHistory`: `StateFlow<List<HistoryEntry>>`. Active browsing history stream.
+  * `allBookmarks`: `StateFlow<List<BookmarkEntry>>`. Active bookmark lists.
+  * `currentSection`: `MutableStateFlow<BrowserSection>`. The active panel view.
+* **Key Methods**:
+  * `addNewTab(url)`: Spawns a new tab, persisting it to SQLite via `BrowserRepository`. Writes custom logs.
+  * `switchToTab(tab)` / `closeTab(tabId)`: Shifts focusing or destroys instances.
+  * `groupTabs(tabIds, groupName)`: Groups tabs together in custom visual folders.
+  * `cleanInputUrl(input)`: Sanitizes browser search strings, translating terms into query engines or domain paths.
+  * `exportBackup(uri, onSuccess, onError)` / `importBackup(uri, onSuccess, onError)`: Backup logic executing on `Dispatchers.IO` to export/restore browser databases securely.
+
+---
+
+### 3. Background Audio Playback Engine: `WtrBrowserService.kt`
+* **Purpose**: An Android Foreground Service that hosts the TextToSpeech engine, coordinates MediaSession buttons, controls lockscreen integrations, and holds hardware CPU wake locks.
+* **Namespace**: `com.example`
+* **Inheritance**: `android.app.Service`
+* **Key Fields & States**:
+  * `ttsEngine`: `TextToSpeech?`. System-level voice synthesis engine.
+  * `mediaSession`: `MediaSessionCompat?`. Active MediaSession pipeline transmitting audio states and buttons to lockscreen, notification pull-downs, and Bluetooth controllers.
+  * `wakeLock` & `wifiLock`: CPU and network hardware locks ensuring continuous playback when screens are deactivated.
+  * `serviceScope`: `CoroutineScope`. Lifecycle-bound scope utilizing a `SupervisorJob` on `Dispatchers.Main` to ensure clean, leak-free stream consumption.
+  * `notificationThrottleHandler` & `webviewSpeechTimeoutHandler`: Timers managing notification intervals to protect IPC binders.
+* **Inner Structures & Listeners**:
+  * `WtrUtteranceListener`: Custom `UtteranceProgressListener` wrapper monitoring voice synthetics states:
+    * `onStart(utteranceId)`: Signals start of a paragraph segment.
+    * `onDone(utteranceId)`: Advances playlist `currentTrackIndex` by 1.
+    * `onRangeStart(utteranceId, start, end, frame)`: Updates real-time CSS font highlighting coordinates back to the active WebKit instance.
+    * `onError(utteranceId)`: Logs failure logs inside `WtrLogManager` and attempts auto-recovery steps.
+  * `WtrMediaButtonReceiver`: Custom callbacks listening to lockscreen/earphone buttons (`onPlay`, `onPause`, `onSkipToNext`, `onSkipToPrevious`).
+
+---
+
+### 4. Direct Javascript-to-Native Bridge: `WtrWebAppInterface.kt`
+* **Purpose**: Exposes secure JVM methods mapped directly into the browser viewport under the JS variable name `window.WtrBridge` or `window.WtrAndroidBridge`.
+* **Namespace**: `com.example`
+* **Key Annotation**: `@JavascriptInterface`
+* **Key Methods**:
+  * `onUrlSynced(syncedUrl)`: Relays current WebKit address paths. Highly guarded via active tab validations to prevent background tabs from hijacking address indicators.
+  * `postPlaybackState(isPlaying, novelName, chapterTitle, activeWebsite, speed, pitch)`: Direct playback hook synced from custom on-page control frames.
+  * `speakNative(text, rate, pitch, lang)`: Captures web audio commands and delegates them directly to the native Service queue.
+  * `cancelNative()` / `pauseNative()` / `resumeNative()`: Synchronizes page click events with native voice synthesizer states.
+  * `syncPollState(isPlaying, currentParagraphIndex, currentWordIndex)`: Syncs real-time Web DOM indices to correct Native audio controller bounds.
+
+---
+
+### 5. Unified Communication State Bus: `WtrAudioControlBridge.kt`
+* **Purpose**: Global Singleton state bus mediating event exchanges between Compose layouts, the active WebView, and the Foreground Service.
+* **Namespace**: `com.example`
+* **Type**: `object` (Kotlin Utility Singleton)
+* **Reactive State Flows**:
+  * `isPlaying`: `MutableStateFlow<Boolean>`. Signals system play states.
+  * `novelName` / `chapterTitle`: `MutableStateFlow<String>`. Media session metadata labels.
+  * `playTrackInputList`: `MutableStateFlow<List<String>>`. Live memory array of paragraphs currently actively being spoken. Truncated at 300 elements to guard heap footprints.
+  * `currentTrackIndex`: `MutableStateFlow<Int>`. Tracks current paragraph block.
+  * `ttsSpeed` / `ttsPitch`: `MutableStateFlow<Float>`. Real-time user sliders inputs.
+  * `activeTtsTabId`: `MutableStateFlow<Long?>`. Scopes active playback to one tab, preventing voice overlapping during concurrent multi-tab browsing sessions.
+* **Direct Event Actions**:
+  * `playAction` / `pauseAction` / `nextAction` / `prevAction`: Lambdas mapping buttons down to Web HTML elements or Service loops.
+  * `nextChapterAction`: Delegate executing the autoscroll / next chapter click.
+
+---
+
+### 6. Thread-Safe Telemetry Log: `WtrLogManager.kt`
+* **Purpose**: Records in-app events (page finished, bridge synced, errors, audio state changes), storing them in a thread-safe ring buffer.
+* **Namespace**: `com.example`
+* **Type**: `object` (Singleton Ring Buffer)
+* **Key Components & Fields**:
+  * `_logs`: `Collections.synchronizedList(LinkedList<String>())`. Thread-safe collection holding up to 100 entries.
+  * `loggerScope`: `CoroutineScope` initialized on the background with `Dispatchers.IO` and a `SupervisorJob`.
+* **Operations**:
+  * `log(context, event)`: Prepend time tracking logs, and saves them to SharedPreferences asynchronously using the Coroutine background thread `loggerScope` if logging is enabled.
+  * `clear(context)`: Wipes logs.
+  * `getSavedLogs(context)`: Deserializes logs from SharedPreferences.
+
+---
+
+### 7. Active View Mode Enumeration: `BrowserSection.kt`
+* **Purpose**: Type-safe indicators mapping current visual layout layers inside the main application screen.
+* **Namespace**: `com.example`
+* **Enum Value Map**:
+  * `WEB`: WebView container active.
+  * `TABS`: Tab manager grid active.
+  * `BOOKMARKS`: Novels and website library view active.
+  * `HISTORY`: Browse histories panel active.
+  * `SETTINGS`: Main settings dialog / features control hub active.
+
+---
+
+## 🔁 Complete System-Wide Concurrency Flow
+
+The application coordinates threads to balance reading fluidities with user interfaces:
+
+```
+[Compose Thread (UI)]               [WebKit Thread (JS)]             [Background Service (TTS)]
+        |                                   |                                    |
+        |---> User Clicks Speak             |                                    |
+        |     (Requests paragraphs)         |                                    |
+        |                                   |                                    |
+        |---------------------------------->| Evaluate DOM JavaScript            |
+        |                                   | (Get paragraphs array)             |
+        |                                   |                                    |
+        |<----------------------------------| Return Paragraphs JSON String      |
+        |                                   |                                    |
+        |                                   |                                    |
+        |----------------------------------------------------------------------->| Start Audio Stream
+        |                                   |                                    | (Set CPU & Wifi Lock)
+        |                                   |                                    |
+        |<-----------------------------------------------------------------------| Emit progress metrics
+        |  Highlight active paragraph       |                                    | (Continuous updates)
+        |  Glides viewport scroll bar       |                                    |
 ```
 
 ---
 
-## 🎧 WtrBrowserService.kt (The Core Playback Engine)
+## 🌉 The Javascript Interface & Ad-Blocker/Security Interfacing (CRITICAL)
 
-- **Namespace**: `com.example`
-- **Inheritance**: `android.app.Service` (Foreground Services)
-
-### 1. High-Level Flow Chart
-```
- [OnStartCommand] ----------------> [Configure Notification Channel]
-        |                                       |
-        v                                       v
- [Initialize TTS Engine] ------------> [Register Media Buttons Receiver]
-        |                                       |
-        +<========== [Observe State Changes in Playback List] <==========+
-        |                                                                |
-        v                                                                |
-  [Speech Playback Loop: Speak chunk sequentially]                       |
-        |                                                                |
-        +------------------> [Trigger TTS OnRangeStart callback] --------+
-```
-
-### 2. Key Attributes and Implementations
-- **TextToSpeech `ttsEngine`**: Initialized using standard `android.speech.tts.TextToSpeech`. Handles paragraph parsing.
-- **MediaSessionCompat `mediaSession`**: Provides deep integration into system lockscreens, lockscreen metadata (novel name, chap title) update routines, BT accessories, and earphones widgets.
-- **Throttling Gate**: Restricts notifications/media session updates of title metadata details to `1.5s` gates, eliminating IPC binder serialization bottlenecks when tracking word highlight updates.
-
-### 3. Speech Sequential Pipeline & Auto-Advance Loop
-```kotlin
-private fun speakParagraph(text: String, index: Int) {
-    if (ttsEngine == null) return
-    val params = Bundle().apply {
-        putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "p_$index")
-    }
-    // Speak using state queue setup
-    ttsEngine?.speak(text, TextToSpeech.QUEUE_FLUSH, params, "p_$index")
-}
-```
-
----
-
-## 🌉 WtrAudioControlBridge.kt (The Unified Communication Bus)
-
-- **Namespace**: `com.example`
-- **Type**: `object` (Singleton)
-
-Acts as the shared programmatic pipeline binding Compose views, WebViews, and the foreground speaker loop.
-
-### 1. Reactive State Pipelines (StateFlows)
-- `isPlaying: MutableStateFlow<Boolean>` (Default: `false`)
-- `novelName: MutableStateFlow<String>` (Default: `""`)
-- `chapterTitle: MutableStateFlow<String>` (Default: `""`)
-- `activeWebsite: MutableStateFlow<String>` (Default: `""`)
-- `playTrackInputList: MutableStateFlow<List<String>>` (Default: `emptyList()`)
-- `currentTrackIndex: MutableStateFlow<Int>` (Default: `0`)
-- `ttsSpeed: MutableStateFlow<Float>` (Default: `1.0f`)
-- `ttsPitch: MutableStateFlow<Float>` (Default: `1.0f`)
-- `activeTtsTabId: MutableStateFlow<Int?>` (Default: `null`)
-
----
-
-## 🌐 WtrWebAppInterface.kt (The Android JavaScript Bridge)
-
-- **Namespace**: `com.example`
-- **Inheritance**: Any object mapped via `@JavascriptInterface`
-
-Binds client-side DOM events into native JVM listener callbacks.
-
-### 1. Concrete Interface API Callbacks
-- `@JavascriptInterface fun postPlaybackState(isPlaying: Boolean, name: String, chTitle: String, activeUrl: String, speed: Float, pitch: Float)`: Updates metadata records with webpage-specified novel details.
-- `@JavascriptInterface fun syncPollState(isPlaying: Boolean, currentParagraphIndex: Int, currentWordIndex: Int)`: Receives real-time DOM polling updates to keep physical paragraph indices in lockstep with TTS highlighter positions.
-- `@JavascriptInterface fun onUrlSynced(triggeringTabId: Int, syncedUrl: String)`: Handles core address bar text state migrations on pages when active page content changes.
-
----
-
-## 📈 BrowserViewModel.kt (The Orchestrator)
-
-- **Namespace**: `com.example`
-- **Inheritance**: `androidx.lifecycle.ViewModel`
-
-The center of business logic execution. Runs query processing and tab orchestration.
-
-### 1. Tab Management States & Persistence Loops
-- Tracks and persists active tabs inside local Room memory structures via repository commands.
-- Processes search engine input queries, detecting if an input is a valid HTTP URL or requires parsing as a Google Search fallback query.
-- Coordinates the synchronization of tabs during dynamic lifecycle changes.
-
----
-
-## 📝 WtrLogManager.kt (The Diagnostic System)
-
-- **Namespace**: `com.example`
-- **Type**: `object` (Thread-Safe Ring Buffer)
-
-Houses logging buffers to track actions.
-
-### 1. Diagnostic Architecture Specification
-- Capped at `100` historical diagnostic events inside an in-memory thread-safe `linkedList` to avoid UI hangs or extreme memory ballooning.
-- Log formats write the current timestamp alongside system-critical events:
-  ```kotlin
-  fun log(context: Context, event: String) {
-      val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-      val record = "[$timestamp] $event"
-      // Serialized and cached safely inside Shared Preferences when logging is turned on
-  }
-  ```
-- Checked against `enable_logs` inside Android Shared Preferences to enforce privacy-focused opt-in behaviors.
-- Critical system operations (e.g. paragraph extraction, page loads, volume adjustments) must write debug events through `WtrLogManager.log` for in-app debugging views.
-+
-+---
-+
-+## 🌐 Supported Domains & Scraper Registry
-+The core engine contains specialized patterns for:
-+- **Wtr-Lab** (`wtr-lab.com`)
-+- **WebNovel** (`webnovel.com`)
-+- **NovelHall / FanMtl / NovelBin / FreeWebNovel**
-+- **TimoTxt / Novel543 / Twkan**
-+- **NovelHub** (`novelhub.net`)
-- **NovelHubApp** (`novelhubapp.com`)
+To prevent anti-scraping loops, the JavaScript bridge interacts seamlessly with host domains. Bypassing or disabling WebSpeech mock APIs triggers standard website protection routines, mistaking the reader as a bot and throwing `"Please turn off your ad blocker"` prompts. Keep standard bindings active across all WebKit initializations!

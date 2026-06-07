@@ -281,15 +281,21 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         return repository.isBookmarked(url)
     }
 
-    fun exportBackup(outputStream: java.io.OutputStream, onSuccess: () -> Unit, onError: (Exception) -> Unit) {
+    fun exportBackup(uri: android.net.Uri, onSuccess: () -> Unit, onError: (Exception) -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
+            var outputStream: java.io.OutputStream? = null
             try {
+                val context = getApplication<Application>()
+                outputStream = context.contentResolver.openOutputStream(uri)
+                if (outputStream == null) {
+                    throw Exception("Could not open destination file stream")
+                }
+
                 val json = org.json.JSONObject()
                 json.put("version", 1)
                 json.put("timestamp", System.currentTimeMillis())
 
                 // 1. Settings from SharedPreferences
-                val context = getApplication<Application>()
                 val sharedPrefs = context.getSharedPreferences("wtr_browser_settings", Context.MODE_PRIVATE)
                 val settingsJson = org.json.JSONObject().apply {
                     put("app_theme", sharedPrefs.getString("app_theme", "Dark"))
@@ -299,7 +305,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                     put("auto_focus_paragraphs", sharedPrefs.getBoolean("auto_focus_paragraphs", true))
                     put("remember_paragraphs", sharedPrefs.getBoolean("remember_paragraphs", true))
                     put("auto_translate_enabled", sharedPrefs.getBoolean("auto_translate_enabled", true))
-                    put("auto_translate_domains", sharedPrefs.getString("auto_translate_domains", "timotxt.com, timotxt, novel543.com, novel543, twkan.com, twkan"))
+                    put("auto_translate_domains", sharedPrefs.getString("auto_translate_domains", "timotxt.com, timotxt, novel543.com, novel543, twkan.com, twkan, novelhubapp.com"))
                     put("ad_blocker_enabled", sharedPrefs.getBoolean("ad_blocker_enabled", true))
                 }
                 json.put("settings", settingsJson)
@@ -354,10 +360,10 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 json.put("tabs", tabsArray)
 
                 // Write to output stream
-                withContext(Dispatchers.IO) {
-                    val writer = java.io.BufferedWriter(java.io.OutputStreamWriter(outputStream, "UTF-8"))
-                    writer.write(json.toString(2))
-                    writer.flush()
+                val writer = java.io.BufferedWriter(java.io.OutputStreamWriter(outputStream, "UTF-8"))
+                writer.use {
+                    it.write(json.toString(2))
+                    it.flush()
                 }
                 withContext(Dispatchers.Main) {
                     onSuccess()
@@ -366,21 +372,33 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 withContext(Dispatchers.Main) {
                     onError(e)
                 }
+            } finally {
+                try {
+                    outputStream?.close()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
         }
     }
 
-    fun importBackup(inputStream: java.io.InputStream, onSuccess: () -> Unit, onError: (Exception) -> Unit) {
+    fun importBackup(uri: android.net.Uri, onSuccess: () -> Unit, onError: (Exception) -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
+            var inputStream: java.io.InputStream? = null
             try {
-                val jsonString = withContext(Dispatchers.IO) {
-                    val reader = java.io.BufferedReader(java.io.InputStreamReader(inputStream, "UTF-8"))
+                val context = getApplication<Application>()
+                inputStream = context.contentResolver.openInputStream(uri)
+                if (inputStream == null) {
+                    throw Exception("Could not open source file stream")
+                }
+
+                val jsonString = inputStream.use { stream ->
+                    val reader = java.io.BufferedReader(java.io.InputStreamReader(stream, "UTF-8"))
                     reader.use { it.readText() }
                 }
                 val json = org.json.JSONObject(jsonString)
 
                 // 1. Restore SharedPreferences
-                val context = getApplication<Application>()
                 val sharedPrefs = context.getSharedPreferences("wtr_browser_settings", Context.MODE_PRIVATE)
                 val editor = sharedPrefs.edit()
 
@@ -479,6 +497,12 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     onError(e)
+                }
+            } finally {
+                try {
+                    inputStream?.close()
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
             }
         }

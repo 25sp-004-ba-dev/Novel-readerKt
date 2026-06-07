@@ -45,23 +45,15 @@ fun SettingsPanel(
         contract = ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
         if (uri != null) {
-            try {
-                contentResolver.openOutputStream(uri)?.use { outputStream ->
-                    viewModel.exportBackup(
-                        outputStream = outputStream,
-                        onSuccess = {
-                            Toast.makeText(context, "Backup downloaded successfully!", Toast.LENGTH_SHORT).show()
-                        },
-                        onError = { e ->
-                            Toast.makeText(context, "Backup failed: ${e.message}", Toast.LENGTH_LONG).show()
-                        }
-                    )
-                } ?: run {
-                    Toast.makeText(context, "Could not open selected destination file", Toast.LENGTH_SHORT).show()
+            viewModel.exportBackup(
+                uri = uri,
+                onSuccess = {
+                    Toast.makeText(context, "Backup downloaded successfully!", Toast.LENGTH_SHORT).show()
+                },
+                onError = { e ->
+                    Toast.makeText(context, "Backup failed: ${e.message}", Toast.LENGTH_LONG).show()
                 }
-            } catch (e: Exception) {
-                Toast.makeText(context, "Error export: ${e.message}", Toast.LENGTH_SHORT).show()
-            }
+            )
         }
     }
 
@@ -70,24 +62,16 @@ fun SettingsPanel(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
-            try {
-                contentResolver.openInputStream(uri)?.use { inputStream ->
-                    viewModel.importBackup(
-                        inputStream = inputStream,
-                        onSuccess = {
-                            Toast.makeText(context, "Backup restored successfully!", Toast.LENGTH_SHORT).show()
-                            onDismissRequest() // Auto-close settings dialog so values are refreshed
-                        },
-                        onError = { e ->
-                            Toast.makeText(context, "Restore failed: ${e.message}", Toast.LENGTH_LONG).show()
-                        }
-                    )
-                } ?: run {
-                    Toast.makeText(context, "Could not open selected backup file", Toast.LENGTH_SHORT).show()
+            viewModel.importBackup(
+                uri = uri,
+                onSuccess = {
+                    Toast.makeText(context, "Backup restored successfully!", Toast.LENGTH_SHORT).show()
+                    onDismissRequest() // Auto-close settings dialog so values are refreshed
+                },
+                onError = { e ->
+                    Toast.makeText(context, "Restore failed: ${e.message}", Toast.LENGTH_LONG).show()
                 }
-            } catch (e: Exception) {
-                Toast.makeText(context, "Error import: ${e.message}", Toast.LENGTH_SHORT).show()
-            }
+            )
         }
     }
 

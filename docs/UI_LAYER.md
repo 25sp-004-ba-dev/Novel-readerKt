@@ -13,35 +13,80 @@ The visual theme utilizes standard **Material Design 3 (M3)** schemas with custo
 
 ---
 
-## 📱 BrowserAppScreen.kt (The Main Container View)
+## 📱 Detailed Compose view & Component Directory
 
-`BrowserAppScreen` presents the core interface container of the application. It acts as a multi-layered viewport displaying active WebViews, search components, custom Speed Dials, and the background audio shelf overlay.
+Below is the technical specification of the Compose views, layouts, and panels making up the application's visual system.
 
-```
-+-------------------------------------------------------------+
-|  [Address & URL Search Bar with Tab Toggle Counter]         |
-+-------------------------------------------------------------+
-|                                                             |
-|  [Active Tab WebView Instance (Pooled)]                     |
-|                                                             |
-|  - Renders Active Chapter Contents                          |
-|  - Custom JS Injection Engine Highlights current paragraph  |
-|                                                             |
-+-------------------------------------------------------------+
-|  [Floating Action Button : TTS Play Indicator Overlay]      |
-+-------------------------------------------------------------+
-|  [Bottom Audiobook Controller Shelf]                        |
-|  - Play / Pause | Seek Bar | Chapter Skip                 |
-+-------------------------------------------------------------+
-```
+---
 
-### 1. Injected Stylesheet Rules (Eye-Safe Night Reading)
-Applying dark-mode modifications directly onto standard novel pages forces custom CSS stylesheets straight into client rendering loops:
-```javascript
-let darkStyle = document.createElement('style');
-darkStyle.innerHTML = 'body, div, p, span, article, section { background-color: #121212 !important; color: #E0E0E0 !important; }';
-document.head.appendChild(darkStyle);
-```
+### 1. Main Viewport & Scaffold Coordinator: `BrowserAppScreen.kt`
+Houses the coordinate tree of the application, managing view switches, top search bars, bottom media controller overlays, and WebView bindings.
+* **Component Type**: `@Composable fun BrowserAppScreen(...)`
+* **Exposed Sub-Components & Functions**:
+  * `TopAppBar`: Houses the URL/Search input field, desktop mode toggle, active tab counter, bookmarks star button, and log-view dropdown action menus.
+  * `Bottom Audio Control Shelf`: Integrates playing novel title headers, paragraph seek sliders (e.g., *Paragraph 14 of 95*), skip chapter buttons, and play/pause trackers.
+  * `Diagnostic Logs Dialog`: Slide-up alert dialog showing real-time `WtrLogManager` logs. Features options to "Clear Logs" or "Save as TXT" using standard SAF streams.
+* **State Management**: Collects reactive variables from the shared `BrowserViewModel` using lifecycle-aware standard flows (`collectAsStateWithLifecycle`).
+
+---
+
+### 2. Novels & Website Library Panel: `BookmarksPanel.kt`
+A premium dual-tab visual bookshelf managing standard web links and complex light novels catalogs.
+* **Component Type**: `@Composable fun BookmarksPanel(...)`
+* **Layout Structure & Inner Modules**:
+  * **Dual-Tab Accent Switcher**: Clean selector button grouping inputs into **Websites** (standard bookmarks) and **Novels** (bookshelf).
+  * **Bookshelf Books Grid Canvas**: For bookmarked novels, isNovel renders a premium visual card utilizing initials-based gradient hash graphics when cover images are missing, complete with dynamic spine crease lines. Shows novel name titles, domain labels, and the user's last-viewed reading chapter progress indicators.
+  * **Standard Bookmark rows**: Lightweight visual rows displaying titles and URLs with deletion buttons.
+  * **Library Search Field**: Interactive search bar with dynamic query filters.
+
+---
+
+### 3. Chronological Access Records: `HistoryPanel.kt`
+Displays standard LazyColumn lists detailing past browsing URLs in reverse chronological order.
+* **Component Type**: `@Composable fun HistoryPanel(...)`
+* **Key Components**:
+  * **History Item Row**: Renders webpage names alongside domain summaries, click redirects, and deletion buttons.
+  * **Integrated Clean Engine**: "Delete All" alert dialog providing quick table wipes via the repository.
+
+---
+
+### 4. Interactive Configuration panel: `SettingsPanel.kt`
+Coordinates application preferences, slider thresholds, and backup integrations.
+* **Component Type**: `@Composable fun SettingsPanel(...)`
+* **Key Modules**:
+  * **TTS Adjusters**: Linear sliders tweaking speech playback frequencies (Pitch and Speed multipliers) ranging from $0.5\text{x}$ to $2.5\text{x}$.
+  * **Preferences Sliders**: Force dark content injection toggles, Ad-Blocker interceptor switches, and diagnostics preferences.
+  * **SAF backup launchers**: "Full State Backup" triggering the Android Storage Access Framework picker `ActivityResultContracts.CreateDocument` to export the database. "Restore Backup" launching `OpenDocument` to ingest `.json` data backups sequentially.
+
+---
+
+### 5. Multi-Tab Grid Manager: `TabsPanel.kt`
+A flexible grid viewport enabling multi-window browser interactions, user-agent overrides, and folder stacking.
+* **Component Type**: `@Composable fun TabsPanel(...)`
+* **Internal Structures**:
+  * **Double Column Grid Layout**: Renders open cards showing previews of active tabs with close buttons and Desktop/Mobile mode indicators.
+  * **Nesting Tab Groups Folder Manager**: Combines multiple selected tab IDs into specialized stacked Folders to organize multiple novel series. Handles item removals and group splits gracefully.
+
+---
+
+### 6. Chrome Native New Tab View: `ChromeNewTabPage.kt`
+Renders the default landing page state inside newly spawned tabs.
+* **Component Type**: `@Composable fun ChromeNewTabPage(...)`
+* **Key Layouts**:
+  * **Hero Header Logo**: Beautiful centered branding display header.
+  * **Navigation Grid Tiles**: Instant jump cards routing users directly to popular websites (Google, WebNovel, Royal Road, Scribble Hub).
+  * **Dynamic Quick Search**: Address inputs forwarding searches to the user's favored search providers.
+  * **Recent Visual History list**: Pulls top historic entries from the database for instant chapter resume lookups.
+
+---
+
+### 7. Custom Scripts Worksheets: `WebScripts.kt`
+Utility housing raw compiled Javascript modules injected straight into WebKit rendering loops.
+* **Variables Map**:
+  * `WEB_SPEECH_POLYFILL`: Overrides default browser audio APIs (`window.speechSynthesis`).
+  * `DOM_PARAGRAPH_SCRAPER`: The complete paragraph extractor.
+  * `CSS_FORCE_DARK_STYLES`: Stylistic stylesheet rules forcing OLED background themes.
+  * `CSS_WORD_HIGHLIGHTS`: Configures formatting rules to highlight and color-frame the currently active paragraph spoken on-screen.
 
 ---
 
@@ -101,32 +146,3 @@ One of the application's most critical subsystems is its **custom paragraph DOM 
     return JSON.stringify(paragraphs);
 })();
 ```
-
----
-
-## 🎨 Bottom Audiobook Controller Shelf UI
-
-Renders playback tracks sequentially using standard audio controls:
-- Displays novel name titles, current chapter labels, and source host URLs.
-- Houses standard **Play / Pause**, **Skip Previous**, **Skip Next**, and **Playback Speed** buttons.
-- Draws in-line progress indicators tracking TTS completion sequences (e.g., `Paragraph 12 of 88`).
-- Binds direct callbacks to trigger lockscreen notifications or page-turn requests.
-
----
-
-## 📑 SettingsDialog.kt (The Diagnostics Hub)
-
-Houses controls managing localized runtime configurations:
-- **TTS Settings Slider**: Custom sliders tweaking pitch and rate multipliers (e.g. `0.5x - 2.5x`).
-- **Force Dark Toggle**: Installs or pulls eye-safe dark stylesheets dynamically.
-- **Session Log Viewer**: Exposes scrolling text logs of the thread-safe `WtrLogManager` history records directly to inside-app debug panels.
-- **Cache/Cookie Sweeper**: Drops client-side database records to release app memory allocations safely.
-
----
-
-## 🏠 ChromeNewTabPage.kt (The Speed Dial Page)
-
-Drawn when a tab is pointing to `chrome://newtab`.
-- Integrates custom search inputs forwarding queries to search providers or resolving URL redirects.
-- Standard Grid Cards displaying quick navigation tiles (Google, Webnovel, Royal Road, Scribble Hub).
-- Recent History view: Iterates over the `visitedAt` database list to display quick-jump anchor items.

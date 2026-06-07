@@ -13,6 +13,16 @@ This file serves as the permanent context, directory roadmap, and operational me
 
 ---
 
+## 🧭 Project Documentation Index
+For deep architectural and implementation details, refer to:
+- [🚀 Architecture Overview](docs/ARCHITECTURE_OVERVIEW.md): System-wide topology and state flow synchronization rules.
+- [📱 Core Engine Manual](docs/CORE_ENGINE.md): Detailed internals of background services, bridges, view models, and telemetry.
+- [🎨 UI Subsystem Guide](docs/UI_LAYER.md): Compose layouts, views, settings overlays, and JS scrapers.
+- [🗄️ Data Layer Schema](docs/DATA_LAYER.md): Room database entities, DAO queries, repositories, and Regex parsing heuristics.
+- [🛠️ Complete Fixes Log](docs/fixes.md): Exhaustive debugging history, memory limiters, safe streams, and anti-CAPTCHA implementations.
+
+---
+
 ## ⚠️ Critical Lessons & Past Defect Diagnostics
 
 Ensure you read this section before making any changes to WebView behaviors, lifecycle hooks, or navigation methods to prevent regressions:
@@ -39,13 +49,11 @@ Ensure you read this section before making any changes to WebView behaviors, lif
   val desktopUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
   ```
 
-### 3. Integrated Telemetry (`com.example.WtrLogManager`)
-- **Utility**: In-app diagnostic logging operates off an in-memory thread-safe state list capped at 100 historical records, displaying system actions, web page loads, page redirections, and audio sync bounds.
-- **Rule**: Write logs proactively of all operations, including navigation bounds, audio selections, paragraph tracking status, or file reads, using:
-  ```kotlin
-  com.example.WtrLogManager.log(context, "Descriptive log event")
-  ```
+### 3. Integrated Coroutine Telemetry (`com.example.WtrLogManager`)
+- **Utility**: In-app diagnostic logging operates off an in-memory thread-safe state list capped at 100 historical records, displaying system actions, page loads, and audio bounds.
+- **Rule**: Write logs proactively using `WtrLogManager.log(context, "message")`. Disk writing of serialized logs is delegated cleanly to a dedicated background Coroutine Scope `loggerScope` running on `Dispatchers.IO` to protect UI responsiveness.
 - **Settings Toggle**: Logging is user-controlled via `enable_logs` in Shared Preferences. Respect this flag internally.
+- **Exporting Logs**: Under active debugging, users can download logs as plain text files through the "Save as TXT" option in the Diagnostic popup modal, which launches standard Storage Access Framework loaders.
 
 ### 4. Smart Saving of Paragraphs, Translate, and TTS Auto-Next Coordination
 - **Context**: The TTS polyfill replaces standard browser WebSpeech bindings. Reading position autosave (`remember_paragraphs`), auto-translation scraper, and next-chapter loading have overlapping timing cycles.
@@ -63,9 +71,13 @@ Ensure you read this section before making any changes to WebView behaviors, lif
 - **Context**: Sites like `webnovel.com` load chapters dynamically inside sequential visual containers when the reading user scrolls vertically. 
 - **Rule**: Scraper routines must extract paragraphs across multiple concurrent content containers, keeping track of elements in the DOM. To start reading naturally from the user's current reading point rather than always starting from paragraph 1, the script must calculate elements' positions in the viewport, selecting the paragraph closest to the top of the viewport (`rect.top - 100`). Additionally, junk filter arrays must explicitly purge any background-inserted ad-blocker detection warn texts.
 
-### 8. Robust Backup & Restore Synchronization
+### 8. Robust Backup & Restore Synchronization via SAF Uri
 - **Context**: Users backing up their data need to migrate their browser configurations, tabs, bookmarks, and histories onto fresh installs.
-- **Rule**: When serializing/deserializing backup blobs via JSON, always format nested fields safely. Database clearing instructions (`clearHistory`, `clearBookmarks`, `clearTabs`) MUST execute in sequence before inserting entries from the parsed JSON, and the ViewModel must successfully re-evaluate the currently active tab ID state (`_currentTab.value = restoredTab`) to prevent empty WebViews from initializing on startup or failing to load. Ensure all I/O streams are executed off the Main thread under `Dispatchers.IO`.
+- **Rule**: When serializing/deserializing backup blobs via JSON, always format nested fields safely. Database clearing instructions (`clearHistory`, `clearBookmarks`, `clearTabs`) MUST execute in sequence before inserting entries from the parsed JSON, and the ViewModel must successfully re-evaluate the currently active tab ID state (`_currentTab.value = restoredTab`) to prevent empty WebViews from initializing on startup or failing to load. Ensure all I/O streams are executed off the Main thread under `Dispatchers.IO` using a validated `android.net.Uri` input.
+
+### 9. Google Translate CAPTCHA Anti-Looping and Interceptors
+- **Context**: Rapid chapter-flipping on regional untrusted links translation proxy loops mimics automated search bots, which triggers aggressive Google CAPTCHA challenge screens.
+- **Rule**: Include an explicit anti-CAPTCHA timing lock (4500ms Handler post delay and user notification Toasts) on translated chapter change requests when executing auto-advancing TTS routines.
 
 ---
 
@@ -78,18 +90,18 @@ Ensure you read this section before making any changes to WebView behaviors, lif
 - `/app/src/main/java/com/example/BrowserViewModel.kt`
   - *Core VM: tab operations, history logs, search inputs, query validation, and export/import JSON backup logic.*
 - `/app/src/main/java/com/example/WtrLogManager.kt`
-  - *Thread-safe ring-buffer list logging operations, persisted via split serialization inside SharedPreferences.*
+  - *Thread-safe ring-buffer list logging operations, persisted via split serialization inside SharedPreferences using background Coroutines.*
 - `/app/src/main/java/com/example/WtrWebAppInterface.kt`
   - *Bridges Javascript string variables, paragraph indexes, and media play states into Android native JVM streams.*
 - `/app/src/main/java/com/example/WtrBrowserService.kt`
   - *Foreground service handling CPU locks, lockscreen notifications throttled at 1.5s gates, and TextToSpeech queues.*
 - `/app/src/main/java/com/example/ui/`
-  -  `BrowserAppScreen.kt`: *The core parent container rendering search bar, bottom audio shelf, and nested WebViews.*
-  -  `SettingsDialog.kt`: *Settings panel for speech parameters, force-dark css, ad-blocker, cookies, diagnostic options, and the interactive JSON Backup / Restore importer launcher.*
+  -  `BrowserAppScreen.kt`: *The core parent container rendering search bar, bottom audio shelf, and nested WebViews. Includes SAF txt logger savers.*
+  -  `SettingsDialog.kt`: *Settings panel for speech parameters, force-dark css, ad-blocker, cookies, diagnostic options, and the interactive JSON Backup / Restore importer launcher using Uri streams.*
   -  `ChromeNewTabPage.kt`: *Default screen rendering shortcuts, recent history rows, and search inputs.*
   -  `TabsPanel.kt`: *Double-grid UI folders to manage standalone tabs or nested tab folders.*
 - `/app/src/main/java/com/example/data/`
-  -  *Room database configurations decoupling database tables (`BookmarkEntry`, `HistoryEntry`, `TabEntry`) with simple repository patterns and clean table-wipe queries.*
+  -  *Room database configurations decoupling database tables (`BookmarkEntry`, `HistoryEntry`, `TabEntry`) with simple repository patterns, advanced RegEx chapter title parsers, and clean table-wipe queries.*
 
 ---
 
