@@ -142,6 +142,7 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
     var autoTranslateDomains by remember { mutableStateOf(sharedPrefs.getString("auto_translate_domains", "timotxt.com, timotxt, novel543.com, novel543, twkan.com, twkan, novelhubapp.com") ?: "timotxt.com, timotxt, novel543.com, novel543, twkan.com, twkan, novelhubapp.com") }
     var adBlockerEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("ad_blocker_enabled", true)) }
     var customTextZoom by remember { mutableStateOf(sharedPrefs.getInt("custom_text_zoom", 115)) }
+    var antiCaptchaDelay by remember { mutableStateOf(sharedPrefs.getBoolean("anti_captcha_delay", false)) }
     var previousTabId by remember { mutableStateOf<Long?>(null) }
     var currentThemeName by remember { mutableStateOf(sharedPrefs.getString("app_theme", "Dark") ?: "Dark") }
 
@@ -251,7 +252,12 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                     javaScriptEnabled = true
                     domStorageEnabled = true
                     databaseEnabled = true
+                    
+                    // Native Caching and Performance Optimization
                     cacheMode = WebSettings.LOAD_DEFAULT
+                    allowFileAccess = true
+                    allowContentAccess = true
+                    
                     mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                     mediaPlaybackRequiresUserGesture = false
                     textZoom = customTextZoom
@@ -381,17 +387,86 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
 
                     override fun shouldInterceptRequest(view: WebView?, request: android.webkit.WebResourceRequest?): android.webkit.WebResourceResponse? {
                         val url = request?.url?.toString()
-                        if (url != null && adBlockerEnabled) {
-                            val urlLower = url.lowercase()
-                            val adKeywords = listOf(
-                                "googlesyndication.com", "googleads", "doubleclick.net", "adservice.google",
-                                "adsystem", "popunder", "popads", "onclickads", "taboola", "outbrain",
-                                "mgid.com", "scorecardresearch", "analytics.google"
-                            )
-                            if (adKeywords.any { urlLower.contains(it) }) {
-                                return android.webkit.WebResourceResponse(
-                                    "text/javascript", "UTF-8", java.io.ByteArrayInputStream(ByteArray(0))
+                        if (url != null) {
+                            if (adBlockerEnabled) {
+                                val urlLower = url.lowercase()
+                                val adKeywords = listOf(
+                                    "googlesyndication.com", "googleads", "doubleclick.net", "adservice.google",
+                                    "adsystem", "popunder", "popads", "onclickads", "taboola", "outbrain",
+                                    "mgid.com", "scorecardresearch", "analytics.google"
                                 )
+                                if (adKeywords.any { urlLower.contains(it) }) {
+                                    return android.webkit.WebResourceResponse(
+                                        "text/javascript", "UTF-8", java.io.ByteArrayInputStream(ByteArray(0))
+                                    )
+                                }
+                            }
+                            
+                            // High-performance static assets cache specifically for wtr-lab.com
+                            if (url.contains("wtr-lab.com")) {
+                                val isStatic = url.contains(".js") || url.contains(".css") ||
+                                        url.contains(".woff") || url.contains(".woff2") ||
+                                        url.contains(".png") || url.contains(".jpg") || url.contains(".jpeg") || url.contains(".svg")
+                                if (isStatic) {
+                                    try {
+                                        val safeFileName = java.net.URLEncoder.encode(url, "UTF-8")
+                                            .replace("%", "_")
+                                            .takeLast(120) // Safe file name length boundary
+                                        
+                                        val cacheFolder = java.io.File(context.cacheDir, "wtr_static_cache")
+                                        if (!cacheFolder.exists()) {
+                                            cacheFolder.mkdirs()
+                                        }
+                                        val cacheFile = java.io.File(cacheFolder, safeFileName)
+                                        
+                                        if (cacheFile.exists() && cacheFile.length() > 0) {
+                                            val mimeType = when {
+                                                url.contains(".js") -> "text/javascript"
+                                                url.contains(".css") -> "text/css"
+                                                url.contains(".woff2") -> "font/woff2"
+                                                url.contains(".woff") -> "font/woff"
+                                                url.contains(".png") -> "image/png"
+                                                url.contains(".jpg") || url.contains(".jpeg") -> "image/jpeg"
+                                                url.contains(".svg") -> "image/svg+xml"
+                                                else -> "application/octet-stream"
+                                            }
+                                            com.example.WtrLogManager.log(context, "⚡ Cache Hit for Wtr-Lab: $url -> Loaded from private storage")
+                                            return android.webkit.WebResourceResponse(
+                                                mimeType, "UTF-8", java.io.FileInputStream(cacheFile)
+                                            )
+                                        } else {
+                                            // Synchronously prefetch in the WebView's IO pool thread
+                                            val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                                            connection.connectTimeout = 3000
+                                            connection.readTimeout = 3000
+                                            if (connection.responseCode == 200) {
+                                                connection.inputStream.use { input ->
+                                                    java.io.FileOutputStream(cacheFile).use { output ->
+                                                        input.copyTo(output)
+                                                    }
+                                                }
+                                            }
+                                            if (cacheFile.exists() && cacheFile.length() > 0) {
+                                                val mimeType = when {
+                                                    url.contains(".js") -> "text/javascript"
+                                                    url.contains(".css") -> "text/css"
+                                                    url.contains(".woff2") -> "font/woff2"
+                                                    url.contains(".woff") -> "font/woff"
+                                                    url.contains(".png") -> "image/png"
+                                                    url.contains(".jpg") || url.contains(".jpeg") -> "image/jpeg"
+                                                    url.contains(".svg") -> "image/svg+xml"
+                                                    else -> "application/octet-stream"
+                                                }
+                                                com.example.WtrLogManager.log(context, "⚡ Cache Saved & Served for Wtr-Lab: $url")
+                                                return android.webkit.WebResourceResponse(
+                                                    mimeType, "UTF-8", java.io.FileInputStream(cacheFile)
+                                                )
+                                            }
+                                        }
+                                    } catch (e: Exception) {
+                                        com.example.WtrLogManager.log(context, "Cache error on $url: ${e.message}")
+                                    }
+                                }
                             }
                         }
                         return super.shouldInterceptRequest(view, request)
@@ -827,7 +902,7 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                                                 let el = document.querySelector('.read-content') || document.querySelector('#content') || document.querySelector('.wtr-reader-content') || document.querySelector('.chapter-content') || document.body;
                                                 if (el) containers.push(el);
                                             } else if (host.includes("timotxt") || host.includes("novel543")) {
-                                                let el = document.querySelector('.read-content') || document.querySelector('#content') || document.querySelector('.show_txt') || document.querySelector('.content') || document.querySelector('.txtnav') || document.querySelector('.chapter-content') || document.querySelector('.article-content');
+                                                let el = host.includes("timotxt") ? (document.querySelector('#content') || document.querySelector('.show_txt') || document.querySelector('.read-content')) : (document.querySelector('.show_txt') || document.querySelector('#content') || document.querySelector('.content') || document.querySelector('.txtnav') || document.querySelector('.chapter-content') || document.querySelector('.article-content'));
                                                 if (el) containers.push(el);
                                             } else if (host.includes("twkan")) {
                                                 let el = document.querySelector('#htmlContent') || document.querySelector('#content') || document.querySelector('.active') || document.querySelector('.read-content') || document.querySelector('.article-content');
@@ -1351,7 +1426,7 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                                     });
                                 }
                             } else if (host.includes("timotxt") || host.includes("novel543") || host.includes("wtr-lab")) {
-                                contentEl = document.querySelector('.read-content') || document.querySelector('#content') || document.querySelector('.show_txt') || document.querySelector('.wtr-reader-content');
+                                contentEl = host.includes("timotxt") ? (document.querySelector('#content') || document.querySelector('.show_txt') || document.querySelector('.read-content')) : (document.querySelector('.read-content') || document.querySelector('#content') || document.querySelector('.show_txt') || document.querySelector('.wtr-reader-content'));
                                 if (contentEl) {
                                     let pTags = contentEl.querySelectorAll('p, .wtr-line-segment');
                                     pTags.forEach(p => {
@@ -1440,11 +1515,11 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
     }
 
     // Register decoupled background-safe callbacks
-    LaunchedEffect(Unit) {
+    LaunchedEffect(antiCaptchaDelay) {
         WtrAudioControlBridge.nextChapterAction = {
             val currentUrl = viewModel.currentTab.value?.url ?: ""
             val isTranslated = currentUrl.contains("translate.goog") || currentUrl.contains("translate.google")
-            if (isTranslated) {
+            if (isTranslated && antiCaptchaDelay) {
                 com.example.WtrLogManager.log(context, "Anti-CAPTCHA Delay: Pausing 4.5s before loading next translated chapter.")
                 android.widget.Toast.makeText(context, "Auto-Next: Pausing 4.5s to bypass Google CAPTCHA filters...", android.widget.Toast.LENGTH_SHORT).show()
                 android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
@@ -1572,7 +1647,7 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                             });
                         }
                     } else if (host.includes("timotxt") || host.includes("novel543")) {
-                        let contentEl = document.querySelector('.read-content') || document.querySelector('#content') || document.querySelector('.show_txt');
+                        let contentEl = host.includes("timotxt") ? (document.querySelector('#content') || document.querySelector('.show_txt') || document.querySelector('.read-content')) : (document.querySelector('.show_txt') || document.querySelector('#content'));
                         if (contentEl) {
                             prepareBrParagraphs(contentEl);
                             let pTags = contentEl.querySelectorAll('p, .wtr-line-segment');
@@ -2557,6 +2632,7 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                         autoTranslateDomains = sharedPrefs.getString("auto_translate_domains", "timotxt.com, timotxt, novel543.com, novel543, twkan.com, twkan, novelhubapp.com") ?: "timotxt.com, timotxt, novel543.com, novel543, twkan.com, twkan, novelhubapp.com"
                         adBlockerEnabled = sharedPrefs.getBoolean("ad_blocker_enabled", true)
                         customTextZoom = sharedPrefs.getInt("custom_text_zoom", 115)
+                        antiCaptchaDelay = sharedPrefs.getBoolean("anti_captcha_delay", false)
                         currentThemeName = sharedPrefs.getString("app_theme", "Dark") ?: "Dark"
                     },
                     viewModel = viewModel,

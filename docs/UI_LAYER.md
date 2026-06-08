@@ -55,7 +55,7 @@ Coordinates application preferences, slider thresholds, and backup integrations.
 * **Component Type**: `@Composable fun SettingsPanel(...)`
 * **Key Modules**:
   * **TTS Adjusters**: Linear sliders tweaking speech playback frequencies (Pitch and Speed multipliers) ranging from $0.5\text{x}$ to $2.5\text{x}$.
-  * **Preferences Sliders**: Force dark content injection toggles, Ad-Blocker interceptor switches, and diagnostics preferences.
+  * **Preferences Sliders**: Force dark content injection toggles, Ad-Blocker interceptor switches, customizable Anti-CAPTCHA delay toggle switches, and diagnostics preferences.
   * **SAF backup launchers**: "Full State Backup" triggering the Android Storage Access Framework picker `ActivityResultContracts.CreateDocument` to export the database. "Restore Backup" launching `OpenDocument` to ingest `.json` data backups sequentially.
 
 ---

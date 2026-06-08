@@ -24,6 +24,9 @@ interface BrowserDao {
     @Query("DELETE FROM history")
     suspend fun clearHistory()
 
+    @Query("DELETE FROM history WHERE url = :url AND id != :keepId")
+    suspend fun deleteHistoryDuplicates(url: String, keepId: Long)
+
     // Bookmarks
     @Query("SELECT * FROM bookmarks ORDER BY timestamp DESC")
     fun getAllBookmarks(): Flow<List<BookmarkEntry>>

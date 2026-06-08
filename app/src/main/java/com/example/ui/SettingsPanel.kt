@@ -83,6 +83,7 @@ fun SettingsPanel(
     var rememberParagraphs by remember { mutableStateOf(sharedPrefs.getBoolean("remember_paragraphs", true)) }
     var autoTranslateEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("auto_translate_enabled", true)) }
     var autoTranslateDomains by remember { mutableStateOf(sharedPrefs.getString("auto_translate_domains", "timotxt.com, timotxt, novel543.com, novel543, twkan.com, twkan") ?: "timotxt.com, timotxt, novel543.com, novel543, twkan.com, twkan") }
+    var antiCaptchaDelay by remember { mutableStateOf(sharedPrefs.getBoolean("anti_captcha_delay", false)) }
     var adBlockerEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("ad_blocker_enabled", true)) }
     var customTextZoom by remember { mutableStateOf(sharedPrefs.getInt("custom_text_zoom", 115)) }
     var currentThemeName by remember { mutableStateOf(sharedPrefs.getString("app_theme", "Dark") ?: "Dark") }
@@ -811,6 +812,30 @@ fun SettingsPanel(
                                 textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp),
                                 singleLine = true
                             )
+                            
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Anti-CAPTCHA Delay", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        "Pauses 4.5s on translated chapters to avoid Google Translate bot blocks",
+                                        fontSize = 9.sp,
+                                        color = MaterialTheme.colorScheme.outline
+                                    )
+                                }
+                                Switch(
+                                    checked = antiCaptchaDelay,
+                                    onCheckedChange = { 
+                                        antiCaptchaDelay = it 
+                                        sharedPrefs.edit().putBoolean("anti_captcha_delay", it).apply()
+                                    },
+                                    modifier = Modifier.testTag("anti_captcha_delay_switch").scale(0.8f)
+                                )
+                            }
                         }
                     }
                 }

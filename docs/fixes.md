@@ -28,6 +28,10 @@ This log certifies that all critical regressions, memory leaks, thread locks, st
 | **18** | Lack of crash diagnostics tracing in Production | **Medium**| `CrashReportManager.kt`, `MainActivity.kt` | **FIXED** (Built safe in-app JVM Crash Handler writing to local disk) |
 | **19** | Memory overload leaks on 2GB RAM devices | **Medium**| `PerformanceMonitor.kt` | **FIXED** (Automated heap analytics & garbage collection triggers) |
 | **20** | TTS failing sluggishly or not recovering lazily | **High**   | `WtrBrowserService.kt` | **FIXED** (Polished on-demand lazy rebuild system healers) |
+| **21** | TimoTxt content extraction conflicts with `novel543` | **High**   | `BrowserAppScreen.kt` | **FIXED** (Isolated DOM selectors using precise hostname routing) |
+| **22** | Slow tab loads / Missing caching for `wtr-lab.com` | **Medium** | `BrowserAppScreen.kt` | **FIXED** (Built high-performance local disk proxy asset caching) |
+| **23** | Rigid 4.5s anti-CAPTCHA wait felt slow/unnecessary | **Low**    | `BrowserAppScreen.kt`, `SettingsPanel.kt` | **FIXED** (Added user preference toggle to disable/enable delay) |
+| **24** | Multi-thread race conditions producing duplicate history entries | **High** | `BrowserDao.kt`, `BrowserRepository.kt` | **FIXED** (Serialized insertion with Coroutine Mutex + self-healing duplicates delete query) |
 
 ---
 
@@ -138,3 +142,19 @@ WtrAudioControlBridge.nextChapterAction = {
 ### 16. Self-healing TTS engine recovers on the fly
 * **Pre-fix State**: If the TTS engine setup failed initially or timed out during bootstrap, subsequent play actions failed silently.
 * **Solution**: Wrapped the initialization code in a modular `initTtsEngine` helper function, executing self-healing lazy initialization recovery on demand whenever `speakText` is called.
+
+### 17. Isolating TimoTxt Selectors from Novel543 Conflicts
+* **Pre-fix State**: The generic container selection list shared selectors like `.content` and `.txtnav` across both TimoTxt and Novel543. On `timotxt.com`, this evaluated the high-level `.content` element instead of the `#content` article container, swallowing and overwriting the entire layout into a single broken span.
+* **Solution**: Separated parsing and selector lookup paths based on strict host testing. TimoTxt now uniquely matches its core text containers (`#content` and `.show_txt`) without colliding with any secondary generic wrappers.
+
+### 18. Local Disk Asset Caching for Wtr-Lab
+* **Pre-fix State**: Static script resources, web-fonts, and CSS components from the primary companion site `wtr-lab.com` were fetched from the network on every tab load/refresh, adding up to 5s of overhead depending on connectivity.
+* **Solution**: Developed a custom proxy interceptor inside `shouldInterceptRequest`. Static assets matching JS, CSS, and Font extensions from `wtr-lab.com` are transparently cached on local storage (`cacheDir/wtr_static_cache`), and subsequent requests are resolved instantly from local streams.
+
+### 19. Customizable Anti-CAPTCHA Auto-Next Delay Hook
+* **Pre-fix State**: The 4.5s anti-CAPTCHA safety delay was rigidly applied on all auto-translated book loads, creating an unnecessary wait for users with high-speed proxies or no bot challenge issues.
+* **Solution**: Integrated a user-controlled `"anti_captcha_delay"` switch in settings. When set to false (default), translated chapters transition instantly, but can be enabled if translating hosts flag rapid page flows.
+
+### 20. Lock-safe/Mutex-serialized Browsing History (No Duplicates)
+* **Pre-fix State**: When reading web novels (particularly during TTS sequences), `onPageFinished` (Main UI thread) and script `onUrlSynced` (Binder thread) would execute asynchronously back-to-back. This caused concurrent database queries where both checked `getHistoryByUrl(url) == null` before Room could complete the write, creating multiple duplicate entries for the exact same chapter URL.
+* **Solution**: Added a stateful Kotlin Coroutine `Mutex` (`historyMutex`) inside `BrowserRepository.kt` to enforce atomic, sequential writes. Also added a self-healing `deleteHistoryDuplicates(url, keepId)` query in `BrowserDao.kt` that cleanly finds and purges older duplicate history rows if any slip by or pre-exist, preserving users' bookmarks and tabs perfectly.

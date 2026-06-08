@@ -77,7 +77,11 @@ Ensure you read this section before making any changes to WebView behaviors, lif
 
 ### 9. Google Translate CAPTCHA Anti-Looping and Interceptors
 - **Context**: Rapid chapter-flipping on regional untrusted links translation proxy loops mimics automated search bots, which triggers aggressive Google CAPTCHA challenge screens.
-- **Rule**: Include an explicit anti-CAPTCHA timing lock (4500ms Handler post delay and user notification Toasts) on translated chapter change requests when executing auto-advancing TTS routines.
+- **Rule**: Include an explicit anti-CAPTCHA timing lock (4500ms Handler post delay and user notification Toasts) on translated chapter change requests when executing auto-advancing TTS routines. This delay is customizable via a user preference switch `anti_captcha_delay`.
+
+### 10. Local WebView Asset Caching Engine
+- **Context**: Rapidly switching tabs, loading next chapters, or loading assets on `wtr-lab.com` incurs significant speed penality on pure network roundtrips.
+- **Rule**: Keep dynamic in-memory interceptors active in `shouldInterceptRequest` for `wtr-lab.com` static extension types (`.js`, `.css`, `.png`, `.woff`, `.woff2`, `.ttf`). Load resources from local disk cache (`cacheDir/wtr_static_cache`) instead of hitting the network to guarantee maximum tab switching/scrolling speed.
 
 ---
 

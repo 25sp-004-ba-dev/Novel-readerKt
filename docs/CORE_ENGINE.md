@@ -128,6 +128,8 @@ Below is the exhaustive architectural documentation of every core native class i
 * **CrashReportManager.kt**: Standard uncaught JVM exception handler capturing production crash logs in private storage for easy Diagnostics debugging logs exports.
 * **PerformanceMonitor.kt**: Lightweight thread analyzer validating available JVM heap memory limits, throwing warning logs if heap consumption exceeds 80%, and safely force-triggering global garbage collections at 95% threshold capacity.
 * **NetworkErrorHandler.kt**: Built-in exponential retry handler ensuring network scrapes or API operations smoothly retry against network packet losses.
+* **Wtr-Lab Asset Cache Proxy**: A custom intercepting engine inside `shouldInterceptRequest`. Transparantly caches static resources (CSS, JS, Fonts, Images) from companion websites inside the private local disk cache directory (`cacheDir/wtr_static_cache`) and resolves them inline to eliminate network round-trips and maximize page loading speeds.
+* **Customizable Anti-CAPTCHA Auto-Next Delay**: Configured via a user preference toggle option `"anti_captcha_delay"`. When enabled, pauses auto-advancement on translated chapters for 4.5s to bypass Google Translate's bot-detection heuristics, avoiding CAPTCHA challenge screens. Default is false (instant transitions).
 
 ---
 

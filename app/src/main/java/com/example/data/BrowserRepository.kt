@@ -2,20 +2,32 @@ package com.example.data
 
 import android.net.Uri
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class BrowserRepository(private val browserDao: BrowserDao) {
     val allHistory: Flow<List<HistoryEntry>> = browserDao.getAllHistory()
     val allBookmarks: Flow<List<BookmarkEntry>> = browserDao.getAllBookmarks()
     val allTabsFlow: Flow<List<TabEntry>> = browserDao.getAllTabsFlow()
 
+    private val historyMutex = Mutex()
+
     suspend fun insertHistory(url: String, title: String) {
-        val existing = browserDao.getHistoryByUrl(url)
-        if (existing != null) {
-            browserDao.insertHistory(existing.copy(timestamp = System.currentTimeMillis(), title = title))
-        } else {
-            browserDao.insertHistory(HistoryEntry(url = url, title = title))
-            // Auto prune history size to 500 rows for high-efficiency reading speeds
-            browserDao.pruneHistory(500)
+        historyMutex.withLock {
+            val existing = browserDao.getHistoryByUrl(url)
+            if (existing != null) {
+                val updated = existing.copy(timestamp = System.currentTimeMillis(), title = title)
+                browserDao.insertHistory(updated)
+                try {
+                    browserDao.deleteHistoryDuplicates(url, updated.id)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            } else {
+                browserDao.insertHistory(HistoryEntry(url = url, title = title))
+                // Auto prune history size to 500 rows for high-efficiency reading speeds
+                browserDao.pruneHistory(500)
+            }
         }
     }
 
