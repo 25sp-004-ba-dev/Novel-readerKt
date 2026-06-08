@@ -95,6 +95,14 @@ Ensure you read this section before making any changes to WebView behaviors, lif
   - *Bridges Javascript string variables, paragraph indexes, and media play states into Android native JVM streams.*
 - `/app/src/main/java/com/example/WtrBrowserService.kt`
   - *Foreground service handling CPU locks, lockscreen notifications throttled at 1.5s gates, and TextToSpeech queues.*
+- `/app/src/main/java/com/example/BackupEncryption.kt`
+  - *Secure backup utility generating hardware Store-backed AES keys for database file encryption and decryption routines.*
+- `/app/src/main/java/com/example/CrashReportManager.kt`
+  - *Thread boundary uncaught exception handler creating offline crash logs inside private application storage.*
+- `/app/src/main/java/com/example/PerformanceMonitor.kt`
+  - *Background thread loop validating system RAM consumption, triggering heap alerts, and GC requests.*
+- `/app/src/main/java/com/example/NetworkErrorHandler.kt`
+  - *Exponential backoff retry wrapper to automatically recover from slow or intermittent connection errors.*
 - `/app/src/main/java/com/example/ui/`
   -  `BrowserAppScreen.kt`: *The core parent container rendering search bar, bottom audio shelf, and nested WebViews. Includes SAF txt logger savers.*
   -  `SettingsDialog.kt`: *Settings panel for speech parameters, force-dark css, ad-blocker, cookies, diagnostic options, and the interactive JSON Backup / Restore importer launcher using Uri streams.*

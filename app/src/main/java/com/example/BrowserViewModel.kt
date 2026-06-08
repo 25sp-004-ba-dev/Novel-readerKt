@@ -47,17 +47,31 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
         // Initialize tabs once from DB; subsequently, we manage states in memory and update DB asynchronously
         viewModelScope.launch {
-            val tabsList = repository.allTabsFlow.first()
-            if (tabsList.isEmpty()) {
-                // Create default tab
+            try {
+                val tabsList = repository.allTabsFlow.first()
+                if (tabsList.isEmpty()) {
+                    // Create default tab
+                    val defaultTab = TabEntry(url = "chrome://newtab", title = "New Tab", isCurrent = true)
+                    val id = repository.insertTab(defaultTab)
+                    _currentTab.value = defaultTab.copy(id = id)
+                    _currentUrlInput.value = "chrome://newtab"
+                } else {
+                    var current = tabsList.find { it.isCurrent } ?: tabsList.first()
+                    // Validate URL is not malformed
+                    if (!current.url.startsWith("chrome://") && !current.url.startsWith("http://") && !current.url.startsWith("https://") && current.url.isNotEmpty()) {
+                        com.example.WtrLogManager.log(getApplication(), "Invalid URL detected on current tab: ${current.url}, resetting to home")
+                        current = current.copy(url = "chrome://newtab")
+                        repository.updateTab(current)
+                    }
+                    _currentTab.value = current
+                    _currentUrlInput.value = current.url
+                }
+            } catch (e: Exception) {
+                com.example.WtrLogManager.log(getApplication(), "Session restoration failed, fallback to default tab: ${e.message}")
                 val defaultTab = TabEntry(url = "chrome://newtab", title = "New Tab", isCurrent = true)
                 val id = repository.insertTab(defaultTab)
                 _currentTab.value = defaultTab.copy(id = id)
                 _currentUrlInput.value = "chrome://newtab"
-            } else {
-                val current = tabsList.find { it.isCurrent } ?: tabsList.first()
-                _currentTab.value = current
-                _currentUrlInput.value = current.url
             }
         }
     }
@@ -292,7 +306,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 }
 
                 val json = org.json.JSONObject()
-                json.put("version", 1)
+                json.put("version", 2) // Version 2 supporting encryption
                 json.put("timestamp", System.currentTimeMillis())
 
                 // 1. Settings from SharedPreferences
@@ -359,10 +373,20 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 }
                 json.put("tabs", tabsArray)
 
+                val rawJsonStr = json.toString()
+                
+                // Try Encrypting the backup data securely. Fallback to raw JSON if KeyStore fails.
+                val finalOutput = try {
+                    BackupEncryption.encryptBackup(rawJsonStr)
+                } catch (e: Exception) {
+                    WtrLogManager.log(context, "Encryption failed, falling back to raw JSON: ${e.message}")
+                    rawJsonStr
+                }
+
                 // Write to output stream
                 val writer = java.io.BufferedWriter(java.io.OutputStreamWriter(outputStream, "UTF-8"))
                 writer.use {
-                    it.write(json.toString(2))
+                    it.write(finalOutput)
                     it.flush()
                 }
                 withContext(Dispatchers.Main) {
@@ -392,12 +416,23 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                     throw Exception("Could not open source file stream")
                 }
 
-                val jsonString = kotlinx.coroutines.withTimeout(10000L) {
+                var jsonString = kotlinx.coroutines.withTimeout(15000L) {
                     inputStream.use { stream ->
                         val reader = java.io.BufferedReader(java.io.InputStreamReader(stream, "UTF-8"))
                         reader.use { it.readText() }
                     }
                 }
+
+                // Decrypt if it doesn't look like JSON (doesn't start with {)
+                if (!jsonString.trim().startsWith("{")) {
+                    try {
+                        jsonString = BackupEncryption.decryptBackup(jsonString.trim())
+                    } catch (e: Exception) {
+                        WtrLogManager.log(context, "Backup decryption failed, attempting raw JSON parse: ${e.message}")
+                        throw Exception("Failed to decrypt secure backup. The file might be corrupted.", e)
+                    }
+                }
+
                 val json = org.json.JSONObject(jsonString)
 
                 // 1. Restore SharedPreferences

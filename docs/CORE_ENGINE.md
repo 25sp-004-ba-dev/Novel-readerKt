@@ -39,7 +39,8 @@ Below is the exhaustive architectural documentation of every core native class i
   * `switchToTab(tab)` / `closeTab(tabId)`: Shifts focusing or destroys instances.
   * `groupTabs(tabIds, groupName)`: Groups tabs together in custom visual folders.
   * `cleanInputUrl(input)`: Sanitizes browser search strings, translating terms into query engines or domain paths.
-  * `exportBackup(uri, onSuccess, onError)` / `importBackup(uri, onSuccess, onError)`: Backup logic executing on `Dispatchers.IO` to export/restore browser databases securely.
+  * `exportBackup(uri, onSuccess, onError)` / `importBackup(uri, onSuccess, onError)`: Backup logic executing on `Dispatchers.IO` to export/restore browser databases securely. Automatically encrypts exported database values in AES standard CBC mode via `BackupEncryption.kt` (Version 2 backups) and automatically decrypts them back on import with a plain JSON fallback.
+  * `restoreSessionWithValidation()`: Recovers past tabs and validates startup URLs to prevent malformed/stale redirect loops.
 
 ---
 
@@ -53,6 +54,9 @@ Below is the exhaustive architectural documentation of every core native class i
   * `wakeLock` & `wifiLock`: CPU and network hardware locks ensuring continuous playback when screens are deactivated.
   * `serviceScope`: `CoroutineScope`. Lifecycle-bound scope utilizing a `SupervisorJob` on `Dispatchers.Main` to ensure clean, leak-free stream consumption.
   * `notificationThrottleHandler` & `webviewSpeechTimeoutHandler`: Timers managing notification intervals to protect IPC binders.
+* **Key Methods / Recoveries**:
+  * `initTtsEngine(onComplete)`: Modular self-healing initiator builder for standard text to speech setup.
+  * `speakText(...)`: Triggers voice synthesizers safely. If TTS is not ready or has crashed, triggers self-healing lazy init recovery builders on the fly.
 * **Inner Structures & Listeners**:
   * `WtrUtteranceListener`: Custom `UtteranceProgressListener` wrapper monitoring voice synthetics states:
     * `onStart(utteranceId)`: Signals start of a paragraph segment.
@@ -116,6 +120,14 @@ Below is the exhaustive architectural documentation of every core native class i
   * `BOOKMARKS`: Novels and website library view active.
   * `HISTORY`: Browse histories panel active.
   * `SETTINGS`: Main settings dialog / features control hub active.
+
+---
+
+### 8. System Utilities and Safety Engines
+* **BackupEncryption.kt**: Offers AES/CBC/PKCS7Padding encryption utilizing a secure AES key generated from Android KeyStore Provider. Secures backups under Version 2 scheme.
+* **CrashReportManager.kt**: Standard uncaught JVM exception handler capturing production crash logs in private storage for easy Diagnostics debugging logs exports.
+* **PerformanceMonitor.kt**: Lightweight thread analyzer validating available JVM heap memory limits, throwing warning logs if heap consumption exceeds 80%, and safely force-triggering global garbage collections at 95% threshold capacity.
+* **NetworkErrorHandler.kt**: Built-in exponential retry handler ensuring network scrapes or API operations smoothly retry against network packet losses.
 
 ---
 

@@ -711,11 +711,12 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                     
                     var attempts = 0
                     val maxAttempts = 35 // Wait up to 7 seconds for translation to finalize
+                    val startTime = System.currentTimeMillis()
                     var list = emptyList<String>()
                     var startIdx = 0
                     var extractionSuccess = false
                     
-                    while (attempts < maxAttempts) {
+                    while (attempts < maxAttempts && (System.currentTimeMillis() - startTime) < 5000L) {
                         val resultString = suspendCoroutine<String?> { continuation ->
                             webView.post {
                                 webView.evaluateJavascript(
@@ -977,11 +978,13 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                                 val isChinesePresent = isPageMostlyTranslatingOrChinese(temp)
                                 
                                 if (temp.isEmpty() && attempts < maxAttempts - 1) {
+                                    val delayTime = (200L * java.lang.Math.pow(1.15, attempts.toDouble())).toLong().coerceIn(200, 600)
                                     attempts++
-                                    delay(200)
+                                    delay(delayTime)
                                 } else if (isProxyTranslation && isChinesePresent && attempts < maxAttempts - 1) {
+                                    val delayTime = (250L * java.lang.Math.pow(1.15, attempts.toDouble())).toLong().coerceIn(250, 600)
                                     attempts++
-                                    delay(250) // Wait for translation overlay
+                                    delay(delayTime) // Wait for translation overlay
                                 } else {
                                     list = temp
                                     startIdx = bestIndex
@@ -990,12 +993,14 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                                 }
                             } catch (e: Exception) {
                                 e.printStackTrace()
+                                val delayTime = (150L * java.lang.Math.pow(1.15, attempts.toDouble())).toLong().coerceIn(150, 500)
                                 attempts++
-                                delay(150)
+                                delay(delayTime)
                             }
                         } else {
+                            val delayTime = (150L * java.lang.Math.pow(1.15, attempts.toDouble())).toLong().coerceIn(150, 500)
                             attempts++
-                            delay(150) // Fast fallback 150ms sleep
+                            delay(delayTime) // Fast fallback sleep
                         }
                     }
                     

@@ -129,21 +129,13 @@ class WtrBrowserService : Service() {
         WtrAudioControlBridge.setTtsAccent(accent)
         WtrAudioControlBridge.setTtsVoiceName(voiceName)
 
-        // Initialize TextToSpeech engine
-        tts = TextToSpeech(applicationContext) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                isTtsInitialized = true
-                setupTtsUtteranceListener()
-                fetchAndExposeAvailableVoices()
-            } else {
-                WtrLogManager.log(applicationContext, "TextToSpeech engine failed to initialize with status: $status")
-            }
-        }
+        // Initialize TextToSpeech engine with self-healing recovery helper
+        initTtsEngine()
         
         serviceScope.launch {
-            delay(3000)
+            delay(3500)
             if (!isTtsInitialized) {
-                WtrLogManager.log(applicationContext, "TextToSpeech engine initialization timed out.")
+                WtrLogManager.log(applicationContext, "TextToSpeech engine initialization taking longer than expected...")
             }
         }
 
@@ -265,6 +257,12 @@ class WtrBrowserService : Service() {
 
     private fun speakText(text: String, rate: Float, pitch: Float, lang: String) {
         if (!isTtsInitialized) {
+            WtrLogManager.log(applicationContext, "TTS not ready. Attempting lazy recovery on demand...")
+            initTtsEngine {
+                if (isTtsInitialized) {
+                    speakText(text, rate, pitch, lang)
+                }
+            }
             return
         }
 
@@ -790,6 +788,30 @@ class WtrBrowserService : Service() {
                 }
             }
             wifiLock = null
+        }
+    }
+
+    private fun initTtsEngine(onComplete: (() -> Unit)? = null) {
+        if (isTtsInitialized && tts != null) {
+            onComplete?.invoke()
+            return
+        }
+        synchronized(this) {
+            if (tts == null) {
+                tts = TextToSpeech(applicationContext) { status ->
+                    if (status == TextToSpeech.SUCCESS) {
+                        isTtsInitialized = true
+                        setupTtsUtteranceListener()
+                        fetchAndExposeAvailableVoices()
+                        WtrLogManager.log(applicationContext, "✅ TextToSpeech engine initialized successfully")
+                        onComplete?.invoke()
+                    } else {
+                        WtrLogManager.log(applicationContext, "❌ TextToSpeech failed to initialize: $status")
+                    }
+                }
+            } else if (isTtsInitialized) {
+                onComplete?.invoke()
+            }
         }
     }
 

@@ -1,0 +1,55 @@
+package com.example
+
+import android.app.ActivityManager
+import android.content.Context
+import android.os.Debug
+import kotlinx.coroutines.delay
+
+object PerformanceMonitor {
+    
+    data class MemoryStats(
+        val nativeHeap: Long,
+        val javaHeap: Long,
+        val totalRss: Long
+    )
+    
+    fun getMemoryStats(context: Context): MemoryStats {
+        val runtime = Runtime.getRuntime()
+        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val memInfo = ActivityManager.MemoryInfo()
+        activityManager.getMemoryInfo(memInfo)
+        
+        return MemoryStats(
+            nativeHeap = Debug.getNativeHeapSize(),
+            javaHeap = runtime.totalMemory() - runtime.freeMemory(),
+            totalRss = memInfo.totalMem
+        )
+    }
+    
+    suspend fun monitorPerformance(
+        context: Context,
+        intervalMs: Long = 30000L // Every 30 seconds
+    ) {
+        while (true) {
+            try {
+                delay(intervalMs)
+                val stats = getMemoryStats(context)
+                val heapUsagePercent = (stats.javaHeap * 100) / stats.totalRss
+                
+                if (heapUsagePercent > 80) {
+                    WtrLogManager.log(
+                        context,
+                        "⚠️ High memory usage: ${heapUsagePercent}% (${stats.javaHeap / 1024 / 1024}MB)"
+                    )
+                }
+                
+                if (heapUsagePercent > 95) {
+                    System.gc()
+                    WtrLogManager.log(context, "🗑️ Triggered garbage collection due to high memory")
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+}

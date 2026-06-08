@@ -24,6 +24,8 @@ class MainActivity : ComponentActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashReportManager.init(this)
+        CrashReportManager.clearOldCrashReports(this)
         WtrLogManager.initialize(this)
         enableEdgeToEdge()
 

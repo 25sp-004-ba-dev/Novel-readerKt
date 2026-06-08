@@ -22,6 +22,12 @@ This log certifies that all critical regressions, memory leaks, thread locks, st
 | **12** | Raw Threads utilized in `WtrLogManager` during serialization | **Medium** | `WtrLogManager.kt` | **FIXED** (Migrated to highly safe Coroutine Scope on `Dispatchers.IO`) |
 | **13** | Capturing & compiling debug telemetry in plain text files | **Low** | `BrowserAppScreen.kt` | **FIXED** (Added "Save as TXT" action using Storage Access Framework) |
 | **14** | Google CAPTCHA lockouts on auto-loading trans.goog chapters | **High** | `BrowserAppScreen.kt` | **FIXED** (Anti-CAPTCHA 4.5s delay & user notification warning) |
+| **15** | Unoptimized JS paragraph extraction delay loop | **Medium**| `BrowserAppScreen.kt` | **FIXED** (Implemented Exponential Backoff with 5s timeout limits) |
+| **16** | Vulnerability in plaintext storage backups | **High**   | `BackupEncryption.kt`, `BrowserViewModel.kt` | **FIXED** (Completed AES-CBC Keystore Encryption for user privacy) |
+| **17** | Unindexed Room Database Search Performance slow downs | **Medium**| `AppDatabase.kt`, `HistoryEntry.kt`, `BookmarkEntry.kt` | **FIXED** (Composite key indexes added, upgraded DB schema version to 4) |
+| **18** | Lack of crash diagnostics tracing in Production | **Medium**| `CrashReportManager.kt`, `MainActivity.kt` | **FIXED** (Built safe in-app JVM Crash Handler writing to local disk) |
+| **19** | Memory overload leaks on 2GB RAM devices | **Medium**| `PerformanceMonitor.kt` | **FIXED** (Automated heap analytics & garbage collection triggers) |
+| **20** | TTS failing sluggishly or not recovering lazily | **High**   | `WtrBrowserService.kt` | **FIXED** (Polished on-demand lazy rebuild system healers) |
 
 ---
 
@@ -108,3 +114,27 @@ WtrAudioControlBridge.nextChapterAction = {
     }
 }
 ```
+
+### 11. Optimized JS Paragraph Extraction with Exponential Backoff and Timeout
+* **Pre-fix State**: Paragraph extraction on slow-loading websites was unoptimized. It had rigid delay loops that did not dynamically back off, which put higher CPU pressure on the main thread and lacked a hard execution timeout limit.
+* **Solution**: Reconfigured the extraction process to track an exact `startTime` with a strict `5000ms` max execution limit. Incorporated a smooth exponential backoff equation `(baseL * Math.pow(1.15, attempts))` preventing heavy spinlocks during slower network page translations.
+
+### 12. Transactional Backup & Restore Security with AES Encryption
+* **Pre-fix State**: Backups were written in plain text, making users' reading bookmarks, tabs, and sensitive browser session histories readable by any application with storage permissions.
+* **Solution**: Developed `BackupEncryption.kt` employing robust AES encryption in CBC mode with PKCS7 padding, using a customized secret key generated and securely stored through the Android KeyStore System. Versioned encrypted backups seamlessly under `Version 2`.
+
+### 13. Room SQLite Query Performance Upgrades (Indexes & Migrations)
+* **Pre-fix State**: High history lists and novel bookmarks lookup speeds degraded over time as table rows increased due to sequential table scans.
+* **Solution**: Mapped custom single and composite SQLite indexes (`idx_history_url`, `idx_history_timestamp`, `idx_bookmark_url`, `idx_bookmark_domain`, `idx_bookmark_isnovel`) on entities. Cleanly bumped schema configuration to `version 4` with persistent destructive state validation.
+
+### 14. JVM Uncaught Crash Logging (Production Diagnosis)
+* **Pre-fix State**: Raw runtime crashes or unhandled exceptions closed the app instantly without leaving a searchable trace or crash log, making user investigations difficult.
+* **Solution**: Built `CrashReportManager.kt` capturing all uncaught thread exceptions, serializing thread stacks alongside the current in-app debug buffers, and saving logs directly into private directories.
+
+### 15. Memory Pressure Auto-Management with Garbage Collection
+* **Pre-fix State**: Background web engine renders and massive novel content chunks triggered heap allocation failures on low-end devices without warning.
+* **Solution**: Formulated a thread-safe `PerformanceMonitor.kt` active background loop. It emits immediate memory utilization warns at 80% RAM footprints, and forces garbage collection (`System.gc()`) to restore memory headroom safely if consumption breaches 95% limits.
+
+### 16. Self-healing TTS engine recovers on the fly
+* **Pre-fix State**: If the TTS engine setup failed initially or timed out during bootstrap, subsequent play actions failed silently.
+* **Solution**: Wrapped the initialization code in a modular `initTtsEngine` helper function, executing self-healing lazy initialization recovery on demand whenever `speakText` is called.

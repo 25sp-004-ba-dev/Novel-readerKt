@@ -125,10 +125,17 @@ The reader engine has specialized scraper logic and optimized playback flows for
 * **Hijacking Prevention Shield**: Prevents background or inactive tabs from hijacking active navigation hooks. Injected JavaScript page synchronization bridges are strictly restricted, validating tab associations only if `currentActiveTab?.id == tab.id`, preventing unwanted redirects, URL freezing, or random blank pages.
 * **Adaptive User-Agent Strings**: Handheld user-agent overrides utilize standard Android identifiers preventing modern servers from mistaking the internal WebKit as an unidentifiable automated robot client (eliminating infinite Cloudflare challenge loops).
 
-### 8. Full State Backup & Restore (JSON Exporter)
+### 8. Full State Backup & Restore (JSON Exporter with AES Keystore Encryption)
 * **Single-File Portability**: Users can export their complete browser configuration (SharedPreferences settings, all histories, all bookmarks, and open tabs with desktop-mode states) into a highly condensed JSON file.
+* **AES-CBC Keystore Security**: Backups are encrypted in AES CBC mode with PKCS7Padding using a secret key securely stored and managed by the hardware-backed Android KeyStore Provider. This ensures user bookmarks, history lists, and open tab sessions remain strictly private and unreadable by outside engines. Version 2 backups are automatically decrypted on import, seamlessly falling back to raw JSON parsing if an older Version 1 plaintext file is provided.
 * **Storage Access Framework (SAF)**: Utilizes native `ActivityResultContracts.CreateDocument` and `OpenDocument` to provide a secure dialog where users can select download Folders or upload backups.
 * **Transactional Restores**: Database states are safely cleared and updated sequentially under `Dispatchers.IO`. Restored tabs and settings are immediately re-loaded into memory, auto-refreshing the screen back into the previous reading state upon upload.
+
+### 9. Automated Health & Security Guard Subsystems
+* **Uncaught JVM Crash Tracing (`CrashReportManager`)**: A self-contained production diagnostics utility intercepting uncaught exceptions, writing complete stack traces and system diagnostics into private file storage, and exposing text logs exports.
+* **Heap Pressure Controller (`PerformanceMonitor`)**: Periodically monitors JVM allocated memory, displaying notifications if consumption breaches 80%, and safely triggers garbage collection sweeps (`System.gc()`) to avoid heap exhaustions if usage hits 95%.
+* **Self-Healing TTS Recovery**: Polishes background speech synthetics on mobile devices by checking TTS health in every play call, automatically launching lazy initialization builders on demand if the background engine had timed out or failed to boot on launch.
+* **Optimized Scraper Loop**: Paragraphs scraper routine employs exponential backoff on retry timeouts and sets strict execution boundaries capped at `5000ms`, neutralizing page freezes during slower proxy network translations.
 
 ---
 

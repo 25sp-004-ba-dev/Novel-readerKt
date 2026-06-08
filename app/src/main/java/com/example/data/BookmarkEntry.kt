@@ -1,9 +1,17 @@
 package com.example.data
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "bookmarks")
+@Entity(
+    tableName = "bookmarks",
+    indices = [
+        Index(value = ["url"], name = "idx_bookmark_url"),
+        Index(value = ["domain"], name = "idx_bookmark_domain"),
+        Index(value = ["isNovel"], name = "idx_bookmark_isnovel")
+    ]
+)
 data class BookmarkEntry(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val url: String,

@@ -12,7 +12,7 @@ The data layer is built on **Jetpack Room**, which abstracts standard SQLite tra
 ### 1. Database Holder: `AppDatabase.kt`
 The abstract boundary declaring the operational database and database connections.
 * **Component Type**: `abstract class AppDatabase : RoomDatabase()`
-* **Primary Scope**: Defines the SQLite file mapping, configuration schemas, and Dao access points. Matches `version = 3` with programmatic destruction.
+* **Primary Scope**: Defines the SQLite file mapping, configuration schemas, and Dao access points. Matches `version = 4` with persistent single/composite table speed indexes.
 * **Key Attributes & Inner Components**:
   * `INSTANCE`: Volatile thread-safe caching variable protecting dual-initialization.
   * `getDatabase(context)`: Standard synchronized thread-safe Singleton constructor. Invokes `Room.databaseBuilder(..., "wtr_browser_db")`.
@@ -37,6 +37,9 @@ Holds browser tab states, tab groups, and historical session markers to rebuild 
 
 ### 2. HistoryEntry (`history` Table)
 Stores visited web pages to build the Quick Speed-Dial cards and recent navigation rows.
+* **Database Indexes**:
+  * `idx_history_url`: Index on `url`. Optimizes history presence query checks.
+  * `idx_history_timestamp`: Index on `timestamp`. Accelerates chronological listing fetches.
 * **Property Schema**:
   * `id`: `Long` (Primary Key, auto-generated). Unique historical index.
   * `url`: `String`. Visited webpage URL.
@@ -45,6 +48,10 @@ Stores visited web pages to build the Quick Speed-Dial cards and recent navigati
 
 ### 3. BookmarkEntry (`bookmarks` Table)
 Permits the saving of novel chapters, websites, and custom web links.
+* **Database Indexes**:
+  * `idx_bookmark_url`: Index on `url`. High speed bookmark checker queries.
+  * `idx_bookmark_domain`: Index on `domain`. Dominant filter lists optimizations.
+  * `idx_bookmark_isnovel`: Index on `isNovel`. Bookshelf library visual queries optimizer.
 * **Property Schema**:
   * `id`: `Long` (Primary Key, auto-generated). Unique bookmark index.
   * `url`: `String`. Saved page address.
