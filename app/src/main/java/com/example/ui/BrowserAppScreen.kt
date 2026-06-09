@@ -409,9 +409,9 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                                         url.contains(".png") || url.contains(".jpg") || url.contains(".jpeg") || url.contains(".svg")
                                 if (isStatic) {
                                     try {
-                                        val safeFileName = java.net.URLEncoder.encode(url, "UTF-8")
-                                            .replace("%", "_")
-                                            .takeLast(120) // Safe file name length boundary
+                                        val messageDigest = java.security.MessageDigest.getInstance("SHA-256")
+                                        val hashBytes = messageDigest.digest(url.toByteArray(Charsets.UTF_8))
+                                        val safeFileName = hashBytes.joinToString("") { "%02x".format(it) }
                                         
                                         val cacheFolder = java.io.File(context.cacheDir, "wtr_static_cache")
                                         if (!cacheFolder.exists()) {
@@ -435,33 +435,26 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                                                 mimeType, "UTF-8", java.io.FileInputStream(cacheFile)
                                             )
                                         } else {
-                                            // Synchronously prefetch in the WebView's IO pool thread
-                                            val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-                                            connection.connectTimeout = 3000
-                                            connection.readTimeout = 3000
-                                            if (connection.responseCode == 200) {
-                                                connection.inputStream.use { input ->
-                                                    java.io.FileOutputStream(cacheFile).use { output ->
-                                                        input.copyTo(output)
+                                            // Asynchronously prefetch so we don't block the WebView's resource loading pipeline
+                                            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                                                try {
+                                                    val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                                                    connection.connectTimeout = 3000
+                                                    connection.readTimeout = 3000
+                                                    if (connection.responseCode == 200) {
+                                                        connection.inputStream.use { input ->
+                                                            val tempFile = java.io.File(cacheFolder, "$safeFileName.tmp")
+                                                            java.io.FileOutputStream(tempFile).use { output ->
+                                                                input.copyTo(output)
+                                                            }
+                                                            tempFile.renameTo(cacheFile)
+                                                        }
                                                     }
+                                                } catch (e: Exception) {
+                                                    // Ignore background prefetch errors
                                                 }
                                             }
-                                            if (cacheFile.exists() && cacheFile.length() > 0) {
-                                                val mimeType = when {
-                                                    url.contains(".js") -> "text/javascript"
-                                                    url.contains(".css") -> "text/css"
-                                                    url.contains(".woff2") -> "font/woff2"
-                                                    url.contains(".woff") -> "font/woff"
-                                                    url.contains(".png") -> "image/png"
-                                                    url.contains(".jpg") || url.contains(".jpeg") -> "image/jpeg"
-                                                    url.contains(".svg") -> "image/svg+xml"
-                                                    else -> "application/octet-stream"
-                                                }
-                                                com.example.WtrLogManager.log(context, "⚡ Cache Saved & Served for Wtr-Lab: $url")
-                                                return android.webkit.WebResourceResponse(
-                                                    mimeType, "UTF-8", java.io.FileInputStream(cacheFile)
-                                                )
-                                            }
+                                            return null
                                         }
                                     } catch (e: Exception) {
                                         com.example.WtrLogManager.log(context, "Cache error on $url: ${e.message}")

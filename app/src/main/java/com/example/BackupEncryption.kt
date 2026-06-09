@@ -50,7 +50,8 @@ object BackupEncryption {
             generateKey()
         }
         
-        val key = keyStore.getKey(KEYSTORE_ALIAS, null) as javax.crypto.SecretKey
+        val keyEntry = keyStore.getKey(KEYSTORE_ALIAS, null) ?: throw IllegalStateException("Keystore key $KEYSTORE_ALIAS not found")
+        val key = keyEntry as? javax.crypto.SecretKey ?: throw IllegalStateException("Key is not a SecretKey: ${keyEntry.javaClass.simpleName}")
         val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
         
         return cipher.apply {

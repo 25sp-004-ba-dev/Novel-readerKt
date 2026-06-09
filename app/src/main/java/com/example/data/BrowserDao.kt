@@ -9,6 +9,9 @@ interface BrowserDao {
     @Query("SELECT * FROM history ORDER BY timestamp DESC")
     fun getAllHistory(): Flow<List<HistoryEntry>>
 
+    @Query("SELECT * FROM history ORDER BY timestamp DESC")
+    suspend fun getAllHistoryList(): List<HistoryEntry>
+
     @Query("SELECT * FROM history WHERE url = :url LIMIT 1")
     suspend fun getHistoryByUrl(url: String): HistoryEntry?
 

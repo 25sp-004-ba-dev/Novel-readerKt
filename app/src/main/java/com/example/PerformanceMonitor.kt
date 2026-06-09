@@ -4,6 +4,7 @@ import android.app.ActivityManager
 import android.content.Context
 import android.os.Debug
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 object PerformanceMonitor {
     
@@ -30,7 +31,7 @@ object PerformanceMonitor {
         context: Context,
         intervalMs: Long = 30000L // Every 30 seconds
     ) {
-        while (true) {
+        while (kotlinx.coroutines.currentCoroutineContext().isActive) {
             try {
                 delay(intervalMs)
                 val stats = getMemoryStats(context)
@@ -47,6 +48,8 @@ object PerformanceMonitor {
                     System.gc()
                     WtrLogManager.log(context, "🗑️ Triggered garbage collection due to high memory")
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 e.printStackTrace()
             }

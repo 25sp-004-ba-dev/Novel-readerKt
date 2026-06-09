@@ -12,22 +12,90 @@ class BrowserRepository(private val browserDao: BrowserDao) {
 
     private val historyMutex = Mutex()
 
+    private fun normalizeUrl(url: String): String {
+        return try {
+            val uri = Uri.parse(url)
+            val builder = uri.buildUpon()
+            val keysToClear = listOf(
+                "_x_tr_sl", "_x_tr_tl", "_x_tr_hl", "_x_tr_pto", "_x_tr_sch",
+                "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"
+            )
+            val queryNames = uri.queryParameterNames
+            if (queryNames?.isNotEmpty() == true) {
+                builder.clearQuery()
+                for (name in queryNames) {
+                    if (name !in keysToClear) {
+                        val values = uri.getQueryParameters(name)
+                        for (value in values) {
+                            builder.appendQueryParameter(name, value)
+                        }
+                    }
+                }
+            }
+            var normalized = builder.build().toString().trim()
+            if (normalized.endsWith("/")) {
+                normalized = normalized.substring(0, normalized.length - 1)
+            }
+            normalized
+        } catch (e: Exception) {
+            url.trim().trimEnd('/')
+        }
+    }
+
+    private fun getHost(url: String): String {
+        return try {
+            val host = Uri.parse(url).host?.lowercase() ?: ""
+            host.replace(".translate.goog", "").replace("translate.goog", "").replace("www.", "")
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
     suspend fun insertHistory(url: String, title: String) {
+        val normalizedInputUrl = normalizeUrl(url)
+        val inputHost = getHost(url)
+        val cleanTitle = title.trim()
+
         historyMutex.withLock {
-            val existing = browserDao.getHistoryByUrl(url)
+            val historyList = try {
+                browserDao.getAllHistoryList()
+            } catch (e: Exception) {
+                emptyList()
+            }
+
+            val existing = historyList.firstOrNull { entry ->
+                normalizeUrl(entry.url) == normalizedInputUrl || (
+                    cleanTitle.isNotEmpty() &&
+                    cleanTitle.length > 3 &&
+                    entry.title.trim().equals(cleanTitle, ignoreCase = true) &&
+                    getHost(entry.url) == inputHost
+                )
+            }
+
             if (existing != null) {
-                val updated = existing.copy(timestamp = System.currentTimeMillis(), title = title)
+                val bestTitle = if (cleanTitle.length > existing.title.length) cleanTitle else existing.title
+                val bestUrl = if (url.length < existing.url.length && url.startsWith("https")) url else existing.url
+
+                val updated = existing.copy(
+                    url = bestUrl,
+                    title = bestTitle.ifEmpty { title },
+                    timestamp = System.currentTimeMillis()
+                )
                 browserDao.insertHistory(updated)
                 try {
+                    browserDao.deleteHistoryDuplicates(existing.url, updated.id)
                     browserDao.deleteHistoryDuplicates(url, updated.id)
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
             } else {
                 browserDao.insertHistory(HistoryEntry(url = url, title = title))
-                // Auto prune history size to 500 rows for high-efficiency reading speeds
-                browserDao.pruneHistory(500)
             }
+        }
+        try {
+            browserDao.pruneHistory(500)
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 

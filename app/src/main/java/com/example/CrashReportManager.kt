@@ -9,7 +9,9 @@ import java.util.Locale
 object CrashReportManager {
     
     private const val CRASH_LOG_DIR = "crash_reports"
-    private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+    private val dateFormat = object : ThreadLocal<SimpleDateFormat>() {
+        override fun initialValue() = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+    }
     
     fun init(context: Context) {
         val originalHandler = Thread.getDefaultUncaughtExceptionHandler()
@@ -21,7 +23,7 @@ object CrashReportManager {
     }
     
     private fun saveCrashReport(context: Context, thread: Thread, exception: Throwable) {
-        val timestamp = dateFormat.format(Date())
+        val timestamp = dateFormat.get()?.format(Date()) ?: ""
         val crashDir = File(context.filesDir, CRASH_LOG_DIR).apply { mkdirs() }
         val crashFile = File(crashDir, "crash_${System.currentTimeMillis()}.log")
         
@@ -36,7 +38,8 @@ object CrashReportManager {
                 appendLine("  at ${element.className}.${element.methodName}(${element.fileName}:${element.lineNumber})")
             }
             appendLine("\nRecent Logs:")
-            WtrLogManager.logs.take(20).forEach { log ->
+            val currentLogs = try { WtrLogManager.logs.take(20) } catch (e: Exception) { emptyList() }
+            currentLogs.forEach { log ->
                 appendLine("  $log")
             }
         }
