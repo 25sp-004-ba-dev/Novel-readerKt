@@ -359,7 +359,6 @@ class WtrBrowserService : Service() {
     private fun detectLanguageTag(text: String): String {
         if (text.isEmpty()) return "en-US"
         var zhCount = 0
-        var viCount = 0
         var ruCount = 0
         var enCount = 0
         val sampleLength = minOf(text.length, 250)
@@ -368,7 +367,6 @@ class WtrBrowserService : Service() {
             when {
                 c in '\u4e00'..'\u9fa5' -> zhCount++
                 c in '\u0400'..'\u04FF' -> ruCount++
-                "áàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđÁÀẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬÉÈẺẼẸÊẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴĐ".contains(c) -> viCount++
                 c.isLetter() && c.code < 128 -> enCount++
             }
         }
@@ -377,11 +375,10 @@ class WtrBrowserService : Service() {
             return "en-US"
         }
         
-        val maxCount = maxOf(zhCount, viCount, ruCount, enCount)
+        val maxCount = maxOf(zhCount, ruCount, enCount)
         return when {
             maxCount == 0 -> "en-US"
             maxCount == zhCount -> "zh-CN"
-            maxCount == viCount -> "vi-VN"
             maxCount == ruCount -> "ru-RU"
             else -> "en-US"
         }

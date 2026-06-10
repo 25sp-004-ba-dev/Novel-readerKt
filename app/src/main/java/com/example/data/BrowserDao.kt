@@ -34,6 +34,9 @@ interface BrowserDao {
     @Query("SELECT * FROM bookmarks ORDER BY timestamp DESC")
     fun getAllBookmarks(): Flow<List<BookmarkEntry>>
 
+    @Query("SELECT * FROM bookmarks ORDER BY timestamp DESC")
+    suspend fun getAllBookmarksList(): List<BookmarkEntry>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertBookmark(entry: BookmarkEntry)
 

@@ -1,6 +1,7 @@
 package com.example.data
 
 import android.net.Uri
+import com.example.WtrLogManager
 import com.example.sites.WebsiteSupportRegistry
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
@@ -206,4 +207,22 @@ class BrowserRepository(private val browserDao: BrowserDao) {
     suspend fun updateTab(tab: TabEntry) = browserDao.updateTab(tab)
     suspend fun deleteTab(id: Long) = browserDao.deleteTab(id)
     suspend fun clearTabs() = browserDao.clearTabs()
+
+    suspend fun validateDatabaseIntegrity(): Boolean {
+        return try {
+            val history = browserDao.getAllHistoryList()
+            val bookmarks = browserDao.getAllBookmarksList()
+            val tabs = browserDao.getAllTabs()
+            
+            // Check for empty/malformed entries in primary fields
+            val historyValid = history.none { it.url.isEmpty() }
+            val bookmarksValid = bookmarks.none { it.url.isEmpty() }
+            val tabsValid = tabs.none { it.url.isEmpty() }
+            
+            historyValid && bookmarksValid && tabsValid
+        } catch (e: Exception) {
+            WtrLogManager.log(null, "Database integrity check failed: ${e.message}")
+            false
+        }
+    }
 }

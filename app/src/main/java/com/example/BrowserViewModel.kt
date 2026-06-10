@@ -470,107 +470,60 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
 
-                val jsonString = kotlinx.coroutines.withTimeout(30000L) {
-                    val reader = java.io.BufferedReader(java.io.InputStreamReader(processingStream, "UTF-8"))
-                    reader.use { it.readText() }
-                }
-
-                val json = org.json.JSONObject(jsonString)
+                // Use our streaming parser! This completely reads the stream without loading it whole.
+                val backupData = StreamingJsonParser.parseBackupStream(processingStream)
 
                 // 1. Restore SharedPreferences
                 val sharedPrefs = context.getSharedPreferences("wtr_browser_settings", Context.MODE_PRIVATE)
                 val editor = sharedPrefs.edit()
 
-                if (json.has("settings")) {
-                    val settingsJson = json.getJSONObject("settings")
-                    if (settingsJson.has("app_theme")) editor.putString("app_theme", settingsJson.getString("app_theme"))
-                    if (settingsJson.has("custom_text_zoom")) editor.putInt("custom_text_zoom", settingsJson.getInt("custom_text_zoom"))
-                    if (settingsJson.has("force_dark_content")) editor.putBoolean("force_dark_content", settingsJson.getBoolean("force_dark_content"))
-                    if (settingsJson.has("enable_web_trackplayer")) editor.putBoolean("enable_web_trackplayer", settingsJson.getBoolean("enable_web_trackplayer"))
-                    if (settingsJson.has("auto_focus_paragraphs")) editor.putBoolean("auto_focus_paragraphs", settingsJson.getBoolean("auto_focus_paragraphs"))
-                    if (settingsJson.has("remember_paragraphs")) editor.putBoolean("remember_paragraphs", settingsJson.getBoolean("remember_paragraphs"))
-                    if (settingsJson.has("auto_translate_enabled")) editor.putBoolean("auto_translate_enabled", settingsJson.getBoolean("auto_translate_enabled"))
-                    if (settingsJson.has("auto_translate_domains")) editor.putString("auto_translate_domains", settingsJson.getString("auto_translate_domains"))
-                    if (settingsJson.has("ad_blocker_enabled")) editor.putBoolean("ad_blocker_enabled", settingsJson.getBoolean("ad_blocker_enabled"))
-                    editor.apply()
+                backupData.settings.forEach { (key, value) ->
+                    when (value) {
+                        is String -> editor.putString(key, value)
+                        is Int -> editor.putInt(key, value)
+                        is Boolean -> editor.putBoolean(key, value)
+                        is Long -> editor.putLong(key, value)
+                        is Float -> editor.putFloat(key, value)
+                        is Double -> {
+                            // SharedPreferences doesn't support Double, but standard fallback
+                            editor.putFloat(key, value.toFloat())
+                        }
+                    }
                 }
+                editor.apply()
 
                 // Get DB instances
                 val db = AppDatabase.getDatabase(context)
                 val dao = db.browserDao()
 
-                // 2. Restore History
-                if (json.has("history")) {
-                    val historyArray = json.getJSONArray("history")
-                    dao.clearHistory()
-                    for (i in 0 until historyArray.length()) {
-                        val obj = historyArray.getJSONObject(i)
-                        val entry = HistoryEntry(
-                            url = obj.getString("url"),
-                            title = obj.getString("title"),
-                            timestamp = obj.optLong("timestamp", System.currentTimeMillis())
-                        )
-                        dao.insertHistory(entry)
+                // Restore tables
+                dao.clearHistory()
+                backupData.history.forEach { dao.insertHistory(it) }
+
+                dao.clearBookmarks()
+                backupData.bookmarks.forEach { dao.insertBookmark(it) }
+
+                dao.clearTabs()
+                var currentTabToLoad: TabEntry? = null
+                backupData.tabs.forEach { tab ->
+                    val newId = dao.insertTab(tab)
+                    if (tab.isCurrent) {
+                        currentTabToLoad = tab.copy(id = newId)
                     }
                 }
 
-                // 3. Restore Bookmarks
-                if (json.has("bookmarks")) {
-                    val bookmarksArray = json.getJSONArray("bookmarks")
-                    dao.clearBookmarks()
-                    for (i in 0 until bookmarksArray.length()) {
-                        val obj = bookmarksArray.getJSONObject(i)
-                        val entry = BookmarkEntry(
-                            url = obj.getString("url"),
-                            title = obj.getString("title"),
-                            timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
-                            isNovel = obj.optBoolean("isNovel", false),
-                            novelTitle = if (obj.isNull("novelTitle")) null else obj.optString("novelTitle"),
-                            chapterTitle = if (obj.isNull("chapterTitle")) null else obj.optString("chapterTitle"),
-                            imageUrl = if (obj.isNull("imageUrl")) null else obj.optString("imageUrl"),
-                            domain = if (obj.isNull("domain")) null else obj.optString("domain"),
-                            lastViewedChapterUrl = if (obj.isNull("lastViewedChapterUrl")) null else obj.optString("lastViewedChapterUrl"),
-                            lastViewedChapterTitle = if (obj.isNull("lastViewedChapterTitle")) null else obj.optString("lastViewedChapterTitle")
-                        )
-                        dao.insertBookmark(entry)
-                    }
-                }
-
-                // 4. Restore Tabs
-                if (json.has("tabs")) {
-                    val tabsArray = json.getJSONArray("tabs")
-                    dao.clearTabs()
-                    var currentTabToLoad: TabEntry? = null
-                    for (i in 0 until tabsArray.length()) {
-                        val obj = tabsArray.getJSONObject(i)
-                        val entry = TabEntry(
-                            url = obj.getString("url"),
-                            title = obj.getString("title"),
-                            isCurrent = obj.optBoolean("isCurrent", false),
-                            isDesktopMode = obj.optBoolean("isDesktopMode", false),
-                            groupId = if (obj.isNull("groupId")) null else obj.optLong("groupId"),
-                            timestamp = obj.optLong("timestamp", System.currentTimeMillis())
-                        )
-                        val newId = dao.insertTab(entry)
-                        if (entry.isCurrent) {
-                            currentTabToLoad = entry.copy(id = newId)
-                        }
-                    }
-                    withContext(Dispatchers.Main) {
-                        if (currentTabToLoad != null) {
-                            _currentTab.value = currentTabToLoad
-                            _currentUrlInput.value = currentTabToLoad.url
-                        } else {
-                            val allRestored = dao.getAllTabs()
-                            if (allRestored.isNotEmpty()) {
-                                val target = allRestored.first()
-                                _currentTab.value = target
-                                _currentUrlInput.value = target.url
-                            }
-                        }
-                    }
-                }
                 withContext(Dispatchers.Main) {
+                    if (currentTabToLoad != null) {
+                        _currentTab.value = currentTabToLoad
+                        _currentUrlInput.value = currentTabToLoad.url
+                    } else {
+                        val allRestored = dao.getAllTabs()
+                        if (allRestored.isNotEmpty()) {
+                            val target = allRestored.first()
+                            _currentTab.value = target
+                            _currentUrlInput.value = target.url
+                        }
+                    }
                     onSuccess()
                 }
             } catch (e: Exception) {
