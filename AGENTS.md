@@ -85,6 +85,10 @@ Ensure you read this section before making any changes to WebView behaviors, lif
 - **Context**: Rapidly switching tabs, loading next chapters, or loading assets on `wtr-lab.com` incurs significant speed penality on pure network roundtrips.
 - **Rule**: Keep dynamic in-memory interceptors active in `shouldInterceptRequest` for `wtr-lab.com` static extension types (`.js`, `.css`, `.png`, `.woff`, `.woff2`, `.ttf`). Load resources from local disk cache (`cacheDir/wtr_static_cache`) instead of hitting the network to guarantee maximum tab switching/scrolling speed.
 
+### 11. Premium Gemini Translation Isolation & Bypass Logic (CRITICAL)
+- **Context**: Users expect Chinese/foreign web novels on auto-translation domains to translate with high-quality contextual localizations using Gemini API. Normal webpages (like catalog interfaces, search engines, standard portals) should not be processed via expensive Gemini APIs and continue utilizing the default Google Translate proxy instead.
+- **Rule**: If `gemini_translate_enabled` is active with an API key, the browser intercepts matched domain routes and blocks standard proxy redirects (i.e. `shouldTranslateUrl` returns `false`) ONLY IF the URL matches the `isNovelChapterUrl(...)` query format. Once loaded, the browser triggers the visual paragraph extraction and replacement, subsequently feeding the translated text array back to the active reader TTS speech engine.
+
 ---
 
 ## 📜 Complete Codebase Map
@@ -97,6 +101,8 @@ Ensure you read this section before making any changes to WebView behaviors, lif
   - *Core VM: tab operations, history logs, search inputs, query validation, and export/import JSON backup logic.*
 - `/app/src/main/java/com/example/StreamingJsonParser.kt`
   - *Highly optimized, memory-efficient streaming JSON pull-parser using native Android `JsonReader` for backup import parsing.*
+- `/app/src/main/java/com/example/GeminiTranslator.kt`
+  - *High-throughput contextual novel localizer interface integrating Google Generative AI Android SDK to translate foreign paragraphs in-place.*
 - `/app/src/main/java/com/example/WtrLogManager.kt`
   - *Thread-safe ring-buffer list logging operations, persisted via split serialization inside SharedPreferences using background Coroutines.*
 - `/app/src/main/java/com/example/WtrWebAppInterface.kt`

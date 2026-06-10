@@ -143,6 +143,8 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
     var autoTranslateEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("auto_translate_enabled", true)) }
     val defaultTranslateDomains = remember { WebsiteSupportRegistry.getAutoTranslateSites().joinToString(", ") }
     var autoTranslateDomains by remember { mutableStateOf(sharedPrefs.getString("auto_translate_domains", defaultTranslateDomains) ?: defaultTranslateDomains) }
+    var geminiTranslateEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("gemini_translate_enabled", false)) }
+    var geminiApiKey by remember { mutableStateOf(sharedPrefs.getString("gemini_api_key", "") ?: "") }
     var adBlockerEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("ad_blocker_enabled", true)) }
     var customTextZoom by remember { mutableStateOf(sharedPrefs.getInt("custom_text_zoom", 115)) }
     var antiCaptchaDelay by remember { mutableStateOf(sharedPrefs.getBoolean("anti_captcha_delay", false)) }
@@ -199,6 +201,21 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
     val translationAttempts = remember { mutableStateMapOf<String, Int>() }
     val lastTranslationTime = remember { mutableStateOf(mutableMapOf<String, Long>()) }
 
+    val isNovelChapterUrl: (String?) -> Boolean = { url ->
+        if (url == null) {
+            false
+        } else {
+            val isSupportedNovelHost = com.example.sites.WebsiteSupportRegistry.findSupport(url) != null
+            val urlLower = url.lowercase()
+            val hasChapterKeyword = urlLower.contains("chapter") || 
+                                    urlLower.contains("-ch-") || 
+                                    urlLower.contains("/ch/") ||
+                                    urlLower.contains("novelhubapp") ||
+                                    urlLower.contains("wtr-lab")
+            isSupportedNovelHost || hasChapterKeyword
+        }
+    }
+
     val isDomainMatchedForTranslation: (String?) -> Boolean = { url ->
         if (url == null || !autoTranslateEnabled) {
             false
@@ -217,7 +234,9 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
     }
 
     val shouldTranslateUrl: (String?) -> Boolean = { url ->
-        if (!isDomainMatchedForTranslation(url)) {
+        if (geminiTranslateEnabled && geminiApiKey.trim().isNotEmpty() && isNovelChapterUrl(url)) {
+            false
+        } else if (!isDomainMatchedForTranslation(url)) {
             false
         } else {
             val urlLower = url!!.lowercase()
@@ -1327,10 +1346,17 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
     val currentRunExtractionAndPlay by rememberUpdatedState(runHtmlTextExtractionAndPlay)
     val currentTriggerNextChapter by rememberUpdatedState(triggerNextChapterNavigation)
 
+    var isGeminiTranslating by remember { mutableStateOf(false) }
+
     // Detect page finished loading and auto-extract/resume in audiobook mode (observes URL updates to withstand translation redirects dynamically)
     LaunchedEffect(isWebLoading, isAudiobookModeActive, activeTab?.url) {
         if (!isWebLoading && isAudiobookModeActive) {
             val urlVal = activeTab?.url ?: ""
+            
+            // If Gemini Translate is active on this page, wait until isGeminiTranslating is completed
+            if (geminiTranslateEnabled && geminiApiKey.isNotEmpty() && isDomainMatchedForTranslation(urlVal) && isNovelChapterUrl(urlVal)) {
+                return@LaunchedEffect
+            }
             
             // If the URL is scheduled for auto-translation, but Google Translate proxy is not yet loaded, skip this event and wait until the actual translated URL load completes
             if (autoTranslateEnabled && isDomainMatchedForTranslation(urlVal) && !urlVal.contains("translate.goog")) {
@@ -1343,6 +1369,144 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                 currentRunExtractionAndPlay()
             } else {
                 WtrAudioControlBridge.setIsAudiobookModeActive(false)
+            }
+        }
+    }
+
+    // Run Gemini Translation on page load completion
+    LaunchedEffect(isWebLoading, activeTab?.url, geminiTranslateEnabled, geminiApiKey) {
+        if (!isWebLoading && geminiTranslateEnabled && geminiApiKey.trim().isNotEmpty()) {
+            val urlVal = activeTab?.url ?: ""
+            if (urlVal.isNotEmpty() && urlVal != "chrome://newtab" && isDomainMatchedForTranslation(urlVal) && isNovelChapterUrl(urlVal)) {
+                val webView = currentActiveWebView
+                if (webView != null) {
+                    isGeminiTranslating = true
+                    try {
+                        com.example.WtrLogManager.log(context, "Gemini Translation: Starting page translation for $urlVal")
+                        
+                        // Step 1: Assign IDs and Extract raw text paragraphs
+                        val extractionJs = """
+                            (function() {
+                                let paragraphs = [];
+                                let pTags = document.querySelectorAll('p');
+                                if (pTags.length === 0) {
+                                    pTags = document.querySelectorAll('div, span');
+                                }
+                                
+                                function isJunk(text) {
+                                    let t = text.toLowerCase().trim();
+                                    if (t.length < 5) return true;
+                                    const promoKeywords = [
+                                        "join our discord", "join discord", "patreon", "support me", "support the author",
+                                        "rate this", "please review", "please rate", "author's note", "author note",
+                                        "recommend", "translator", "translation", "editor's note", "editor note"
+                                    ];
+                                    return promoKeywords.some(keyword => t.includes(keyword));
+                                }
+
+                                pTags.forEach(p => {
+                                    let text = p.innerText.trim();
+                                    if (text.length > 5 && !isJunk(text)) {
+                                        let pid = paragraphs.length;
+                                        p.setAttribute('wtr-translation-id', pid);
+                                        paragraphs.push(text);
+                                    }
+                                });
+                                return JSON.stringify(paragraphs);
+                            })();
+                        """.trimIndent()
+
+                        val paragraphsJson = suspendCancellableCoroutine<String> { continuation ->
+                            webView.evaluateJavascript(extractionJs) { result ->
+                                if (continuation.isActive) {
+                                    continuation.resume(result ?: "[]") {}
+                                }
+                            }
+                        }
+
+                        // Parse extraction JSON
+                        val cleanJson = if (paragraphsJson.startsWith("\"") && paragraphsJson.endsWith("\"")) {
+                            try {
+                                val unescaped = org.json.JSONTokener(paragraphsJson).nextValue() as String
+                                unescaped
+                            } catch (e: Exception) {
+                                paragraphsJson
+                            }
+                        } else {
+                            paragraphsJson
+                        }
+
+                        val paragraphsList = mutableListOf<String>()
+                        try {
+                            val jsonArray = org.json.JSONArray(cleanJson)
+                            for (i in 0 until jsonArray.length()) {
+                                paragraphsList.add(jsonArray.getString(i))
+                            }
+                        } catch (e: Exception) {
+                            com.example.WtrLogManager.log(context, "Gemini Translation: Error parsing extracted paragraphs: ${e.message}")
+                        }
+
+                        if (paragraphsList.isNotEmpty()) {
+                            com.example.WtrLogManager.log(context, "Gemini Translation: Sending ${paragraphsList.size} paragraphs to gemini-2.5-flash...")
+                            
+                            // Step 2: Call Gemini API
+                            val translatedList = com.example.GeminiTranslator.translateParagraphs(
+                                paragraphsList,
+                                geminiApiKey
+                            )
+
+                            // Step 3: Inject translated paragraphs back into WebView DOM
+                            val translationMapJson = org.json.JSONArray()
+                            translatedList.forEachIndexed { index, text ->
+                                val obj = org.json.JSONObject()
+                                obj.put("id", index)
+                                obj.put("text", text)
+                                translationMapJson.put(obj)
+                            }
+
+                            val injectionJs = """
+                                (function() {
+                                    try {
+                                        const translations = ${translationMapJson.toString()};
+                                        translations.forEach(item => {
+                                            const el = document.querySelector('[wtr-translation-id="' + item.id + '"]');
+                                            if (el) {
+                                                el.innerText = item.text;
+                                            }
+                                        });
+                                        return "success";
+                                    } catch(e) {
+                                        return "error: " + e.toString();
+                                    }
+                                })();
+                            """.trimIndent()
+
+                            webView.evaluateJavascript(injectionJs) { result ->
+                                com.example.WtrLogManager.log(context, "Gemini Translation: Injection result: $result")
+                            }
+                            
+                            com.example.WtrLogManager.log(context, "Gemini Translation: Completed translation successfully!")
+                        } else {
+                            com.example.WtrLogManager.log(context, "Gemini Translation: No translatable paragraphs found.")
+                        }
+                    } catch (e: Exception) {
+                        com.example.WtrLogManager.log(context, "Gemini Translation Error: ${e.message}")
+                        android.widget.Toast.makeText(context, "Gemini translation error: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+                    } finally {
+                        isGeminiTranslating = false
+                    }
+                }
+            }
+        }
+    }
+
+    // Resume audiobook play once Gemini translation has completed
+    LaunchedEffect(isGeminiTranslating, isAudiobookModeActive, isWebLoading) {
+        if (geminiTranslateEnabled && geminiApiKey.isNotEmpty() && !isGeminiTranslating && isAudiobookModeActive && !isWebLoading) {
+            val urlVal = activeTab?.url ?: ""
+            if (urlVal.isNotEmpty() && urlVal != "chrome://newtab" && isDomainMatchedForTranslation(urlVal) && isNovelChapterUrl(urlVal)) {
+                delay(400) // Settle DOM delay
+                currentRunExtractionAndPlay()
             }
         }
     }
@@ -2635,6 +2799,8 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                         autoFocusParagraphs = sharedPrefs.getBoolean("auto_focus_paragraphs", true)
                         autoTranslateEnabled = sharedPrefs.getBoolean("auto_translate_enabled", true)
                         autoTranslateDomains = sharedPrefs.getString("auto_translate_domains", defaultTranslateDomains) ?: defaultTranslateDomains
+                        geminiTranslateEnabled = sharedPrefs.getBoolean("gemini_translate_enabled", false)
+                        geminiApiKey = sharedPrefs.getString("gemini_api_key", "") ?: ""
                         adBlockerEnabled = sharedPrefs.getBoolean("ad_blocker_enabled", true)
                         customTextZoom = sharedPrefs.getInt("custom_text_zoom", 115)
                         antiCaptchaDelay = sharedPrefs.getBoolean("anti_captcha_delay", false)

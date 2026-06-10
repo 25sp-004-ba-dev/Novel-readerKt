@@ -346,6 +346,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                     put("auto_translate_enabled", sharedPrefs.getBoolean("auto_translate_enabled", true))
                     val defaultTranslate = WebsiteSupportRegistry.getAutoTranslateSites().joinToString(", ")
                     put("auto_translate_domains", sharedPrefs.getString("auto_translate_domains", defaultTranslate))
+                    put("gemini_translate_enabled", sharedPrefs.getBoolean("gemini_translate_enabled", false))
+                    put("gemini_api_key", sharedPrefs.getString("gemini_api_key", ""))
                     put("ad_blocker_enabled", sharedPrefs.getBoolean("ad_blocker_enabled", true))
                 }
                 writer.write(settingsJson.toString())

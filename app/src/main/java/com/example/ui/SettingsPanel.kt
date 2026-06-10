@@ -85,6 +85,8 @@ fun SettingsPanel(
     var autoTranslateEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("auto_translate_enabled", true)) }
     val defaultTranslateDomains = remember { WebsiteSupportRegistry.getAutoTranslateSites().joinToString(", ") }
     var autoTranslateDomains by remember { mutableStateOf(sharedPrefs.getString("auto_translate_domains", defaultTranslateDomains) ?: defaultTranslateDomains) }
+    var geminiTranslateEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("gemini_translate_enabled", false)) }
+    var geminiApiKey by remember { mutableStateOf(sharedPrefs.getString("gemini_api_key", "") ?: "") }
     var antiCaptchaDelay by remember { mutableStateOf(sharedPrefs.getBoolean("anti_captcha_delay", false)) }
     var adBlockerEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("ad_blocker_enabled", true)) }
     var customTextZoom by remember { mutableStateOf(sharedPrefs.getInt("custom_text_zoom", 115)) }
@@ -814,6 +816,62 @@ fun SettingsPanel(
                                 textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp),
                                 singleLine = true
                             )
+                            
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Use Gemini AI Translation",
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Translates Chinese/foreign novel chapters using gemini-2.5-flash for contextual localization",
+                                        fontSize = 9.sp,
+                                        color = MaterialTheme.colorScheme.outline
+                                    )
+                                }
+                                Switch(
+                                    checked = geminiTranslateEnabled,
+                                    onCheckedChange = { 
+                                        geminiTranslateEnabled = it 
+                                        sharedPrefs.edit().putBoolean("gemini_translate_enabled", it).apply()
+                                    },
+                                    modifier = Modifier.testTag("gemini_translate_switch").scale(0.8f)
+                                )
+                            }
+
+                            if (geminiTranslateEnabled) {
+                                Spacer(modifier = Modifier.height(2.dp))
+                                var showApiKey by remember { mutableStateOf(false) }
+                                OutlinedTextField(
+                                    value = geminiApiKey,
+                                    onValueChange = { 
+                                        geminiApiKey = it
+                                        sharedPrefs.edit().putString("gemini_api_key", it).apply()
+                                    },
+                                    label = { Text("Gemini API Key", fontSize = 10.sp) },
+                                    placeholder = { Text("AIzaSy...", fontSize = 10.sp) },
+                                    modifier = Modifier.fillMaxWidth().testTag("gemini_api_key_input"),
+                                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp),
+                                    singleLine = true,
+                                    visualTransformation = if (showApiKey) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                                    trailingIcon = {
+                                        IconButton(onClick = { showApiKey = !showApiKey }) {
+                                            Icon(
+                                                imageVector = if (showApiKey) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                                contentDescription = if (showApiKey) "Hide API Key" else "Show API Key",
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                )
+                            }
                             
                             Spacer(modifier = Modifier.height(6.dp))
                             Row(
