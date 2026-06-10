@@ -53,6 +53,8 @@ import com.example.BrowserSection
 import com.example.MainActivity
 import com.example.getProxyTranslatedUrl
 import com.example.WtrAudioControlBridge
+import com.example.sites.WebsiteSupportRegistry
+import com.example.sites.commons.CommonSelectors
 import com.example.WtrWebAppInterface
 import com.example.data.*
 import kotlinx.coroutines.*
@@ -139,7 +141,8 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
     var forceDarkContent by remember { mutableStateOf(sharedPrefs.getBoolean("force_dark_content", false)) } 
     var autoFocusParagraphs by remember { mutableStateOf(sharedPrefs.getBoolean("auto_focus_paragraphs", true)) } 
     var autoTranslateEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("auto_translate_enabled", true)) }
-    var autoTranslateDomains by remember { mutableStateOf(sharedPrefs.getString("auto_translate_domains", "timotxt.com, timotxt, novel543.com, novel543, twkan.com, twkan, novelhubapp.com") ?: "timotxt.com, timotxt, novel543.com, novel543, twkan.com, twkan, novelhubapp.com") }
+    val defaultTranslateDomains = remember { WebsiteSupportRegistry.getAutoTranslateSites().joinToString(", ") }
+    var autoTranslateDomains by remember { mutableStateOf(sharedPrefs.getString("auto_translate_domains", defaultTranslateDomains) ?: defaultTranslateDomains) }
     var adBlockerEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("ad_blocker_enabled", true)) }
     var customTextZoom by remember { mutableStateOf(sharedPrefs.getInt("custom_text_zoom", 115)) }
     var antiCaptchaDelay by remember { mutableStateOf(sharedPrefs.getBoolean("anti_captcha_delay", false)) }
@@ -775,7 +778,25 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
             isExtracting = true
             coroutineScope.launch(Dispatchers.Main) {
                 try {
-                    val currentUrlLower = (webView.url ?: "").lowercase()
+                    val currentUrl = webView.url ?: ""
+                    val currentUrlLower = currentUrl.lowercase()
+                    
+                    val matchedSupport = WebsiteSupportRegistry.findSupport(currentUrl)
+                    val containerSels = matchedSupport?.containerSelectors ?: listOf(
+                        ".content", "#content", ".chapter-content", ".article-content", "article", "main"
+                    )
+                    val pSel = matchedSupport?.paragraphSelector ?: "p, .wtr-line-segment"
+                    val excludeClasses = (matchedSupport?.excludeSelectors ?: emptyList()).ifEmpty { 
+                        CommonSelectors.COMMON_EXCLUDE 
+                    }
+
+                    val containerSelectorStr = containerSels.joinToString(", ")
+                    val excludeClassesStr = excludeClasses.joinToString(", ")
+
+                    val siteJunkList = matchedSupport?.siteSpecificJunkKeywords ?: emptyList()
+                    val siteJunkJson = siteJunkList.joinToString(separator = ", ") { "\"${it.replace("\"", "\\\"")}\"" }
+
+                    val requiresBrPrep = matchedSupport?.requiresBrPreparation ?: false
                     
                     var attempts = 0
                     val maxAttempts = 35 // Wait up to 7 seconds for translation to finalize
@@ -787,8 +808,12 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                     while (attempts < maxAttempts && (System.currentTimeMillis() - startTime) < 5000L) {
                         val resultString = suspendCoroutine<String?> { continuation ->
                             webView.post {
-                                webView.evaluateJavascript(
-                                    """
+                                val containerSelectorStrEscaped = containerSelectorStr.replace("\"", "\\\"")
+                                val excludeClassesStrEscaped = excludeClassesStr.replace("\"", "\\\"")
+                                val pSelEscaped = pSel.replace("\"", "\\\"")
+                                val requiresBrPrepVal = if (requiresBrPrep) "true" else "false"
+
+                                val jsToRun = """
                                     (function() {
                                         if (window.__wtrTextExtractor) {
                                             return window.__wtrTextExtractor();
@@ -799,196 +824,183 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                                                 let elements = [];
                                                 let host = window.location.hostname;
                                                 
-                                                function isJunk(text) {
-                                                let t = text.toLowerCase().trim();
-                                                if (t.length < 5) {
-                                                    // Allow short Chinese phrases that are clearly not junk
-                                                    if (/[\u4e00-\u9fa5]{2,}/.test(text) && t.length >= 2) {
-                                                        // Keep it if it's just characters
-                                                    } else {
-                                                        return true;
-                                                    }
-                                                }
-                                                if (t.includes("ad-blocker") || t.includes("adblocker") || t.includes("ad block") || t.includes("adblock") || t.includes("please disable") || t.includes("stop your ad blocker") || t.includes("ad blocker detected")) return true;
-                                                if (t.includes(".com") || t.includes(".org") || t.includes(".net") || t.includes(".me") || t.includes(".xyz")  || t.includes("http://") || t.includes("https://")) {
-                                                    if (t.includes("novelbin") || t.includes("novelhall") || t.includes("freewebnovel") || t.includes("fanmtl") || t.includes("timotxt") || t.includes("novel543") || t.includes("twkan") || t.includes("novelhub") || t.includes("novelhubapp") || t.includes("webnovel")) {
-                                                        // Only filter out if it's clearly a promotional link line
-                                                        if (t.length < 100) return true;
-                                                    }
-                                                }
-                                                const promoKeywords = [
-                                                    "join our discord", "join discord", "patreon", "support me", "support the author",
-                                                    "rate this", "please review", "please rate", "author's note", "author note",
-                                                    "editor's note", "editor note",
-                                                    "find any errors", "broken links", "report us", "if you find any", "novelbin",
-                                                    "novelhall", "freewebnovel", "fanmtl", "timotxt", "novel543", "twkan", "novelhub", "novelhubapp", "webnovel", "next chapter",
-                                                    "previous chapter", "table of contents", "read online free", "read online for free",
-                                                    "unlocked chapters", "bonus chapters", "sign up", "sign in", "subscribe to",
-                                                    "follow my page", "download our app", "read this novel", "other novel", "like this book",
-                                                    "stop your ad blocker", "ad blocker detected", "本章未完", "点击下一页", "继续阅读", "本章完", "（本章未完）", "(本章完)",
-                                                    "最新网址", "手机用户请浏览", "更多精彩内容", "投推荐票", "上一章", "下一章", "目录", "书架", "加入书架", "返回封面"
-                                                ];
-                                                if (t.length < 250) {
-                                                    for (let keyword of promoKeywords) {
-                                                        if (t.includes(keyword)) return true;
-                                                    }
-                                                }
-                                                return false;
-                                            }
-                                            
-                                            function prepareBrParagraphs(contentEl) {
-                                                if (!contentEl) return;
-                                                if (contentEl.querySelector('.wtr-line-segment') || contentEl.querySelector('.wtr-focus-highlight')) return;
+                                                const containerSelector = "$containerSelectorStrEscaped";
+                                                const pSelector = "$pSelEscaped";
+                                                const excludeClass = "$excludeClassesStrEscaped";
+                                                const siteJunk = [$siteJunkJson];
+                                                const requiresBrPrep = $requiresBrPrepVal;
                                                 
-                                                // Save original children to work with them
-                                                let children = Array.from(contentEl.childNodes);
-                                                let newHtml = "";
-                                                let currentGroup = "";
-
-                                                children.forEach(node => {
-                                                    if (node.nodeType === 3) { // Text node
-                                                        currentGroup += node.textContent;
-                                                    } else if (node.nodeType === 1) { // Element node
-                                                        if (node.tagName.toLowerCase() === 'br') {
-                                                            if (currentGroup.trim().length > 0) {
-                                                                newHtml += '<span class="wtr-line-segment">' + currentGroup.trim() + '</span><br>';
-                                                                currentGroup = "";
-                                                            }
-                                                        } else if (node.tagName.toLowerCase() === 'p') {
-                                                             if (currentGroup.trim().length > 0) {
-                                                                newHtml += '<span class="wtr-line-segment">' + currentGroup.trim() + '</span>';
-                                                                currentGroup = "";
-                                                            }
-                                                            newHtml += node.outerHTML;
+                                                function isJunk(text) {
+                                                    let t = text.toLowerCase().trim();
+                                                    if (t.length < 5) {
+                                                        if (/[\u4e00-\u9fa5]{2,}/.test(text) && t.length >= 2) {
+                                                            // Keep short Chinese phrases
                                                         } else {
-                                                            currentGroup += node.outerHTML;
+                                                            return true;
                                                         }
                                                     }
-                                                });
-                                                
-                                                if (currentGroup.trim().length > 0) {
-                                                    newHtml += '<span class="wtr-line-segment">' + currentGroup.trim() + '</span>';
-                                                }
-                                                
-                                                if (newHtml.length > 10) {
-                                                    contentEl.innerHTML = newHtml;
-                                                }
-                                            }
-
-                                            let containers = [];
-                                            if (host.includes("webnovel")) {
-                                                let rawContainers = Array.from(document.querySelectorAll('.cha-content, .chapter-content, .cha-words, .chapter-inner'));
-                                                containers = rawContainers.filter(c => !rawContainers.some(other => other !== c && other.contains(c)));
-                                            } else if (host.includes("novelhall")) {
-                                                let el = document.querySelector('#htmlContent') || document.querySelector('.entry-content') || document.querySelector('.active');
-                                                if (el) containers.push(el);
-                                            } else if (host.includes("fanmtl")) {
-                                                let el = document.querySelector('.chapter-content') || document.querySelector('.read-content') || document.querySelector('#chapter-content') || document.querySelector('.content-area');
-                                                if (el) containers.push(el);
-                                            } else if (host.includes("novelbin")) {
-                                                let el = document.querySelector('#chr-content') || document.querySelector('.chr-c') || document.querySelector('#chapter-content') || document.querySelector('.chapter-container');
-                                                if (el) containers.push(el);
-                                            } else if (host.includes("freewebnovel")) {
-                                                let el = document.querySelector('.txt') || document.querySelector('#htmlContent') || document.querySelector('.chapter-content');
-                                                if (el) containers.push(el);
-                                            } else if (host.includes("wtr-lab")) {
-                                                let el = document.querySelector('.read-content') || document.querySelector('#content') || document.querySelector('.wtr-reader-content') || document.querySelector('.chapter-content') || document.body;
-                                                if (el) containers.push(el);
-                                            } else if (host.includes("timotxt") || host.includes("novel543")) {
-                                                let el = host.includes("timotxt") ? (document.querySelector('#content') || document.querySelector('.show_txt') || document.querySelector('.read-content')) : (document.querySelector('.show_txt') || document.querySelector('#content') || document.querySelector('.content') || document.querySelector('.txtnav') || document.querySelector('.chapter-content') || document.querySelector('.article-content'));
-                                                if (el) containers.push(el);
-                                            } else if (host.includes("twkan")) {
-                                                let el = document.querySelector('#htmlContent') || document.querySelector('#content') || document.querySelector('.active') || document.querySelector('.read-content') || document.querySelector('.article-content');
-                                                if (el) containers.push(el);
-                                            } else if (host.includes("novelhub")) {
-                                                let el = document.querySelector('#chr-content') || document.querySelector('.chapter-content') || document.querySelector('.read-content') || document.querySelector('.entry-content') || document.querySelector('.reader-content') || document.querySelector('main article');
-                                                if (el) containers.push(el);
-                                            }
-
-                                            if (containers.length > 0) {
-                                                containers.forEach(contentEl => {
-                                                    if (host.includes("novelhall") || host.includes("timotxt") || host.includes("novel543")) {
-                                                        prepareBrParagraphs(contentEl);
-                                                    }
-                                                    let pSelector = host.includes("webnovel") ? 'p, .cha-paragraph, .pirate' : 'p, .wtr-line-segment';
-                                                    let rawPTags = Array.from(contentEl.querySelectorAll(pSelector));
-                                                    let pTags = rawPTags.filter(p => !rawPTags.some(parent => parent !== p && parent.contains(p)));
+                                                    if (t.includes("ad-blocker") || t.includes("adblocker") || t.includes("ad block") || t.includes("adblock") || t.includes("please disable") || t.includes("stop your ad blocker") || t.includes("ad blocker detected")) return true;
                                                     
-                                                    pTags.forEach(p => {
-                                                        let excludeClass = '.author-note, .gift-box, .recommend-box, .comment-area, .m-comment, .user-opinion, .review-item, .j_recommendation, .book-recommend, .cha-nav, .chapter-control, .nav, .nav-btn, .next_chap, .prev_chap, .next-page, .prev-page, .ads, .adsbygoogle, .btn-group, .custom-control, .category, .desc, .title-book, .chapter-nav, .bottem, .bottem1, .bottem2, .txtnav, .readnav, .headnav, .footer, .header, #header, #footer';
-                                                        if (!p.closest(excludeClass)) {
+                                                    if (t.includes(".com") || t.includes(".org") || t.includes(".net") || t.includes(".me") || t.includes(".xyz") || t.includes("http://") || t.includes("https://")) {
+                                                        if (t.length < 100) return true;
+                                                    }
+                                                    
+                                                    const promoKeywords = [
+                                                        "join our discord", "join discord", "patreon", "support me", "support the author",
+                                                        "rate this", "please review", "please rate", "author's note", "author note",
+                                                        "editor's note", "editor note",
+                                                        "find any errors", "broken links", "report us", "if you find any",
+                                                        "next chapter", "previous chapter", "table of contents", "read online free", "read online for free",
+                                                        "unlocked chapters", "bonus chapters", "sign up", "sign in", "subscribe to",
+                                                        "follow my page", "download our app", "read this novel", "other novel", "like this book",
+                                                        "stop your ad blocker", "ad blocker detected", "本章未完", "点击下一页", "继续阅读", "本章完", "（本章未完）", "(本章完)",
+                                                        "最新网址", "手机用户请浏览", "更多精彩内容", "投推荐票", "上一章", "下一章", "目录", "书架", "加入书架", "返回封面"
+                                                    ];
+                                                    
+                                                    if (t.length < 250) {
+                                                        for (let keyword of promoKeywords) {
+                                                            if (t.includes(keyword)) return true;
+                                                        }
+                                                        for (let keyword of siteJunk) {
+                                                            if (t.includes(keyword.toLowerCase())) return true;
+                                                        }
+                                                    }
+                                                    return false;
+                                                }
+                                                
+                                                function prepareBrParagraphs(contentEl) {
+                                                    if (!contentEl) return;
+                                                    if (contentEl.querySelector('.wtr-line-segment') || contentEl.querySelector('.wtr-focus-highlight')) return;
+                                                    
+                                                    let children = Array.from(contentEl.childNodes);
+                                                    let newHtml = "";
+                                                    let currentGroup = "";
+
+                                                    children.forEach(node => {
+                                                        if (node.nodeType === 3) {
+                                                            currentGroup += node.textContent;
+                                                        } else if (node.nodeType === 1) {
+                                                            if (node.tagName.toLowerCase() === 'br') {
+                                                                if (currentGroup.trim().length > 0) {
+                                                                    newHtml += '<span class="wtr-line-segment">' + currentGroup.trim() + '</span><br>';
+                                                                    currentGroup = "";
+                                                                }
+                                                            } else if (node.tagName.toLowerCase() === 'p') {
+                                                                 if (currentGroup.trim().length > 0) {
+                                                                    newHtml += '<span class="wtr-line-segment">' + currentGroup.trim() + '</span>';
+                                                                    currentGroup = "";
+                                                                }
+                                                                newHtml += node.outerHTML;
+                                                            } else {
+                                                                currentGroup += node.outerHTML;
+                                                            }
+                                                        }
+                                                    });
+                                                    
+                                                    if (currentGroup.trim().length > 0) {
+                                                        newHtml += '<span class="wtr-line-segment">' + currentGroup.trim() + '</span>';
+                                                    }
+                                                    
+                                                    if (newHtml.length > 10) {
+                                                        contentEl.innerHTML = newHtml;
+                                                    }
+                                                }
+
+                                                let containers = [];
+                                                if (containerSelector) {
+                                                    if (host.includes("webnovel")) {
+                                                        let rawContainers = Array.from(document.querySelectorAll(containerSelector));
+                                                        containers = rawContainers.filter(c => !rawContainers.some(other => other !== c && other.contains(c)));
+                                                    } else {
+                                                        let els = document.querySelectorAll(containerSelector);
+                                                        if (els && els.length > 0) {
+                                                            els.forEach(el => containers.push(el));
+                                                        }
+                                                    }
+                                                }
+
+                                                if (containers.length > 0) {
+                                                    containers.forEach(contentEl => {
+                                                        if (requiresBrPrep) {
+                                                            prepareBrParagraphs(contentEl);
+                                                        }
+                                                        let rawPTags = Array.from(contentEl.querySelectorAll(pSelector));
+                                                        let pTags = rawPTags.filter(p => !rawPTags.some(parent => parent !== p && parent.contains(p)));
+                                                        
+                                                        pTags.forEach(p => {
+                                                            if (!p.closest(excludeClass)) {
+                                                                let text = p.innerText.trim();
+                                                                if (text.length > 5 && !isJunk(text)) {
+                                                                    paragraphs.push(text);
+                                                                    elements.push(p);
+                                                                }
+                                                            }
+                                                        });
+                                                    });
+                                                }
+
+                                                if (paragraphs.length === 0) {
+                                                    let bestContainer = null;
+                                                    let maxPLength = 0;
+                                                    document.querySelectorAll('div, article, section').forEach(el => {
+                                                        if (!el.closest('nav, footer, h1, fieldset, form, header, script, style, #comments, .comments, .nav, .footer, .sidebar, #sidebar')) {
+                                                            let pList = el.querySelectorAll('p');
+                                                            if (pList.length > maxPLength) {
+                                                                maxPLength = pList.length;
+                                                                bestContainer = el;
+                                                            }
+                                                        }
+                                                    });
+
+                                                    if (bestContainer && maxPLength > 3) {
+                                                        bestContainer.querySelectorAll('p').forEach(p => {
                                                             let text = p.innerText.trim();
                                                             if (text.length > 5 && !isJunk(text)) {
                                                                 paragraphs.push(text);
                                                                 elements.push(p);
                                                             }
-                                                        }
-                                                    });
-                                                });
-                                            }
-
-                                            if (paragraphs.length === 0) {
-                                                let bestContainer = null;
-                                                let maxPLength = 0;
-                                                document.querySelectorAll('div, article, section').forEach(el => {
-                                                    if (!el.closest('nav, footer, h1, fieldset, form, header, script, style, #comments, .comments, .nav, .footer, .sidebar, #sidebar')) {
-                                                        let pList = el.querySelectorAll('p');
-                                                        if (pList.length > maxPLength) {
-                                                            maxPLength = pList.length;
-                                                            bestContainer = el;
-                                                        }
-                                                    }
-                                                });
-
-                                                if (bestContainer && maxPLength > 3) {
-                                                    bestContainer.querySelectorAll('p').forEach(p => {
-                                                        let text = p.innerText.trim();
-                                                        if (text.length > 5 && !isJunk(text)) {
-                                                            paragraphs.push(text);
-                                                            elements.push(p);
-                                                        }
-                                                    });
-                                                } else {
-                                                    let pTags = document.querySelectorAll('p, li, h1, h2, h3, [class*="paragraph"], [id*="paragraph"]');
-                                                    pTags.forEach(p => {
-                                                        let t = p.innerText.trim();
-                                                        let isChinese = /[\u4e00-\u9fa5]/.test(t);
-                                                        let isValidLength = isChinese ? t.length > 5 : t.length > 15;
-                                                        if (isValidLength && !p.closest('nav, footer, h1, fieldset, form, header, script, style, #comments, .comments, .nav, .footer, .sidebar, #sidebar, .menu, #menu')) {
-                                                            if (!isJunk(t)) {
-                                                                paragraphs.push(t);
-                                                                elements.push(p);
+                                                        });
+                                                    } else {
+                                                        let pTags = document.querySelectorAll('p, li, h1, h2, h3, [class*="paragraph"], [id*="paragraph"]');
+                                                        pTags.forEach(p => {
+                                                            let t = p.innerText.trim();
+                                                            let isChinese = /[\u4e00-\u9fa5]/.test(t);
+                                                            let isValidLength = isChinese ? t.length > 5 : t.length > 15;
+                                                            if (isValidLength && !p.closest('nav, footer, h1, fieldset, form, header, script, style, #comments, .comments, .nav, .footer, .sidebar, #sidebar, .menu, #menu')) {
+                                                                if (!isJunk(t)) {
+                                                                    paragraphs.push(t);
+                                                                    elements.push(p);
+                                                                }
                                                             }
-                                                        }
-                                                    });
+                                                        });
+                                                    }
                                                 }
-                                            }
 
-                                            let bestIndex = 0;
-                                            let minDistance = Infinity;
-                                            for (let i = 0; i < elements.length; i++) {
-                                                let rect = elements[i].getBoundingClientRect();
-                                                let dist = Math.abs(rect.top - 100);
-                                                if (dist < minDistance) {
-                                                    minDistance = dist;
-                                                    bestIndex = i;
+                                                let bestIndex = 0;
+                                                let minDistance = Infinity;
+                                                for (let i = 0; i < elements.length; i++) {
+                                                    let rect = elements[i].getBoundingClientRect();
+                                                    let dist = Math.abs(rect.top - 100);
+                                                    if (dist < minDistance) {
+                                                        minDistance = dist;
+                                                        bestIndex = i;
+                                                    }
                                                 }
-                                            }
 
-                                            return JSON.stringify({
-                                                paragraphs: paragraphs,
-                                                startIndex: bestIndex
-                                            });
-                                        } catch (e) {
-                                            return JSON.stringify({
-                                                error: e.toString()
-                                            });
-                                        }
-                                    };
-                                    return window.__wtrTextExtractor();
-                                })();
-                                    """.trimIndent()
-                                ) { res ->
+                                                return JSON.stringify({
+                                                    paragraphs: paragraphs,
+                                                    startIndex: bestIndex
+                                                });
+                                            } catch (e) {
+                                                return JSON.stringify({
+                                                    error: e.toString()
+                                                });
+                                            }
+                                        };
+                                        return window.__wtrTextExtractor();
+                                    })();
+                                """.trimIndent()
+                                webView.evaluateJavascript(jsToRun) { res ->
                                     continuation.resume(res)
                                 }
                             }
@@ -2622,7 +2634,7 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                         forceDarkContent = sharedPrefs.getBoolean("force_dark_content", false)
                         autoFocusParagraphs = sharedPrefs.getBoolean("auto_focus_paragraphs", true)
                         autoTranslateEnabled = sharedPrefs.getBoolean("auto_translate_enabled", true)
-                        autoTranslateDomains = sharedPrefs.getString("auto_translate_domains", "timotxt.com, timotxt, novel543.com, novel543, twkan.com, twkan, novelhubapp.com") ?: "timotxt.com, timotxt, novel543.com, novel543, twkan.com, twkan, novelhubapp.com"
+                        autoTranslateDomains = sharedPrefs.getString("auto_translate_domains", defaultTranslateDomains) ?: defaultTranslateDomains
                         adBlockerEnabled = sharedPrefs.getBoolean("ad_blocker_enabled", true)
                         customTextZoom = sharedPrefs.getInt("custom_text_zoom", 115)
                         antiCaptchaDelay = sharedPrefs.getBoolean("anti_captcha_delay", false)

@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.BrowserViewModel
 import com.example.WtrAudioControlBridge
+import com.example.sites.WebsiteSupportRegistry
 
 @Composable
 fun SettingsPanel(
@@ -82,7 +83,8 @@ fun SettingsPanel(
     var autoFocusParagraphs by remember { mutableStateOf(sharedPrefs.getBoolean("auto_focus_paragraphs", true)) }
     var rememberParagraphs by remember { mutableStateOf(sharedPrefs.getBoolean("remember_paragraphs", true)) }
     var autoTranslateEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("auto_translate_enabled", true)) }
-    var autoTranslateDomains by remember { mutableStateOf(sharedPrefs.getString("auto_translate_domains", "timotxt.com, timotxt, novel543.com, novel543, twkan.com, twkan") ?: "timotxt.com, timotxt, novel543.com, novel543, twkan.com, twkan") }
+    val defaultTranslateDomains = remember { WebsiteSupportRegistry.getAutoTranslateSites().joinToString(", ") }
+    var autoTranslateDomains by remember { mutableStateOf(sharedPrefs.getString("auto_translate_domains", defaultTranslateDomains) ?: defaultTranslateDomains) }
     var antiCaptchaDelay by remember { mutableStateOf(sharedPrefs.getBoolean("anti_captcha_delay", false)) }
     var adBlockerEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("ad_blocker_enabled", true)) }
     var customTextZoom by remember { mutableStateOf(sharedPrefs.getInt("custom_text_zoom", 115)) }

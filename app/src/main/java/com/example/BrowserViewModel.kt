@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.*
+import com.example.sites.WebsiteSupportRegistry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -232,14 +233,12 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         if (trimmed == "chrome://newtab") {
             return trimmed
         }
-        val lower = trimmed.lowercase()
-        if (lower == "wtr") return "https://wtr-lab.com/en"
-        if (lower == "nov" || lower == "no" || lower == "novel") return "https://www.novelhall.com/"
-        if (lower == "timo" || lower == "timotxt") return "https://www.timotxt.com/"
-        if (lower == "n543" || lower == "novel543") return "https://www.novel543.com/"
-        if (lower == "twkan" || lower == "tw") return "https://twkan.com/"
-        if (lower == "nhub" || lower == "novelhub") return "https://novelhub.net/"
-        if (lower == "nhubapp" || lower == "novelhubapp") return "https://novelhubapp.com/"
+        
+        val matchedSupport = WebsiteSupportRegistry.findSupportByKeyword(trimmed)
+        if (matchedSupport != null) {
+            val pDomain = matchedSupport.domains.first()
+            return if (matchedSupport.siteId == "wtr-lab") "https://wtr-lab.com/en" else "https://$pDomain/"
+        }
 
         if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
             return trimmed
@@ -319,7 +318,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                     put("auto_focus_paragraphs", sharedPrefs.getBoolean("auto_focus_paragraphs", true))
                     put("remember_paragraphs", sharedPrefs.getBoolean("remember_paragraphs", true))
                     put("auto_translate_enabled", sharedPrefs.getBoolean("auto_translate_enabled", true))
-                    put("auto_translate_domains", sharedPrefs.getString("auto_translate_domains", "timotxt.com, timotxt, novel543.com, novel543, twkan.com, twkan, novelhubapp.com"))
+                    val defaultTranslate = WebsiteSupportRegistry.getAutoTranslateSites().joinToString(", ")
+                    put("auto_translate_domains", sharedPrefs.getString("auto_translate_domains", defaultTranslate))
                     put("ad_blocker_enabled", sharedPrefs.getBoolean("ad_blocker_enabled", true))
                 }
                 json.put("settings", settingsJson)
