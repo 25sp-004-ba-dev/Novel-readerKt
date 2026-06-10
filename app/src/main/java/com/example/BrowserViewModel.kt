@@ -308,19 +308,33 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     fun exportBackup(uri: android.net.Uri, onSuccess: () -> Unit, onError: (Exception) -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
-            var outputStream: java.io.OutputStream? = null
+            var rawOutputStream: java.io.OutputStream? = null
+            var processingStream: java.io.OutputStream? = null
+            var writer: java.io.BufferedWriter? = null
             try {
                 val context = getApplication<Application>()
-                outputStream = context.contentResolver.openOutputStream(uri)
-                if (outputStream == null) {
+                rawOutputStream = context.contentResolver.openOutputStream(uri)
+                if (rawOutputStream == null) {
                     throw Exception("Could not open destination file stream")
                 }
 
-                val json = org.json.JSONObject()
-                json.put("version", 2) // Version 2 supporting encryption
-                json.put("timestamp", System.currentTimeMillis())
+                // Wrap in our streaming encryptor.
+                // We use getEncryptingStream which handles Keystore/AES/Base64 streaming dynamically!
+                var encryptingFailed = false
+                try {
+                    processingStream = BackupEncryption.getEncryptingStream(rawOutputStream)
+                } catch (e: Exception) {
+                    encryptingFailed = true
+                    WtrLogManager.log(context, "Encryption stream initialization failed: ${e.message}. Using plain text.")
+                    processingStream = rawOutputStream
+                }
 
-                // 1. Settings from SharedPreferences
+                writer = java.io.BufferedWriter(java.io.OutputStreamWriter(processingStream, "UTF-8"))
+
+                // Start JSON stream writing
+                // 1. Header & settings
+                writer.write("{\"version\":2,\"timestamp\":${System.currentTimeMillis()},\"settings\":")
+                
                 val sharedPrefs = context.getSharedPreferences("wtr_browser_settings", Context.MODE_PRIVATE)
                 val settingsJson = org.json.JSONObject().apply {
                     put("app_theme", sharedPrefs.getString("app_theme", "Dark"))
@@ -334,25 +348,26 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                     put("auto_translate_domains", sharedPrefs.getString("auto_translate_domains", defaultTranslate))
                     put("ad_blocker_enabled", sharedPrefs.getBoolean("ad_blocker_enabled", true))
                 }
-                json.put("settings", settingsJson)
+                writer.write(settingsJson.toString())
 
-                // 2. History
+                // 2. History streaming
+                writer.write(",\"history\":[")
                 val historyList = allHistory.value.ifEmpty { repository.allHistory.first() }
-                val historyArray = org.json.JSONArray()
-                historyList.forEach { entry ->
+                historyList.forEachIndexed { index, entry ->
                     val obj = org.json.JSONObject().apply {
                         put("url", entry.url)
                         put("title", entry.title)
                         put("timestamp", entry.timestamp)
                     }
-                    historyArray.put(obj)
+                    if (index > 0) writer.write(",")
+                    writer.write(obj.toString())
                 }
-                json.put("history", historyArray)
+                writer.write("]")
 
-                // 3. Bookmarks
+                // 3. Bookmarks streaming
+                writer.write(",\"bookmarks\":[")
                 val bookmarksList = allBookmarks.value.ifEmpty { repository.allBookmarks.first() }
-                val bookmarksArray = org.json.JSONArray()
-                bookmarksList.forEach { entry ->
+                bookmarksList.forEachIndexed { index, entry ->
                     val obj = org.json.JSONObject().apply {
                         put("url", entry.url)
                         put("title", entry.title)
@@ -365,14 +380,15 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                         put("lastViewedChapterUrl", entry.lastViewedChapterUrl ?: org.json.JSONObject.NULL)
                         put("lastViewedChapterTitle", entry.lastViewedChapterTitle ?: org.json.JSONObject.NULL)
                     }
-                    bookmarksArray.put(obj)
+                    if (index > 0) writer.write(",")
+                    writer.write(obj.toString())
                 }
-                json.put("bookmarks", bookmarksArray)
+                writer.write("]")
 
-                // 4. Tabs
+                // 4. Tabs streaming
+                writer.write(",\"tabs\":[")
                 val tabsList = repository.getAllTabs()
-                val tabsArray = org.json.JSONArray()
-                tabsList.forEach { entry ->
+                tabsList.forEachIndexed { index, entry ->
                     val obj = org.json.JSONObject().apply {
                         put("url", entry.url)
                         put("title", entry.title)
@@ -381,26 +397,12 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                         put("groupId", entry.groupId ?: org.json.JSONObject.NULL)
                         put("timestamp", entry.timestamp)
                     }
-                    tabsArray.put(obj)
+                    if (index > 0) writer.write(",")
+                    writer.write(obj.toString())
                 }
-                json.put("tabs", tabsArray)
+                writer.write("]}")
+                writer.flush()
 
-                val rawJsonStr = json.toString()
-                
-                // Try Encrypting the backup data securely. Fallback to raw JSON if KeyStore fails.
-                val finalOutput = try {
-                    BackupEncryption.encryptBackup(rawJsonStr)
-                } catch (e: Exception) {
-                    WtrLogManager.log(context, "Encryption failed, falling back to raw JSON: ${e.message}")
-                    rawJsonStr
-                }
-
-                // Write to output stream
-                val writer = java.io.BufferedWriter(java.io.OutputStreamWriter(outputStream, "UTF-8"))
-                writer.use {
-                    it.write(finalOutput)
-                    it.flush()
-                }
                 withContext(Dispatchers.Main) {
                     onSuccess()
                 }
@@ -410,7 +412,17 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 }
             } finally {
                 try {
-                    outputStream?.close()
+                    writer?.close()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+                try {
+                    processingStream?.close()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+                try {
+                    rawOutputStream?.close()
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
@@ -420,29 +432,47 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     fun importBackup(uri: android.net.Uri, onSuccess: () -> Unit, onError: (Exception) -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
-            var inputStream: java.io.InputStream? = null
+            var rawInputStream: java.io.InputStream? = null
+            var processingStream: java.io.InputStream? = null
             try {
                 val context = getApplication<Application>()
-                inputStream = context.contentResolver.openInputStream(uri)
-                if (inputStream == null) {
+                rawInputStream = context.contentResolver.openInputStream(uri)
+                if (rawInputStream == null) {
                     throw Exception("Could not open source file stream")
                 }
 
-                var jsonString = kotlinx.coroutines.withTimeout(15000L) {
-                    inputStream.use { stream ->
-                        val reader = java.io.BufferedReader(java.io.InputStreamReader(stream, "UTF-8"))
-                        reader.use { it.readText() }
+                // Wrap context stream in BufferedInputStream to inspect the header byte
+                val bufferedIn = java.io.BufferedInputStream(rawInputStream)
+                bufferedIn.mark(100)
+
+                var firstByte = -1
+                while (true) {
+                    val b = bufferedIn.read()
+                    if (b == -1) break
+                    if (!Character.isWhitespace(b)) {
+                        firstByte = b
+                        break
+                    }
+                }
+                bufferedIn.reset()
+
+                processingStream = if (firstByte == '{'.code) {
+                    // Raw plaintext JSON
+                    bufferedIn
+                } else {
+                    // Encrypted stream
+                    try {
+                        BackupEncryption.getDecryptingStream(bufferedIn)
+                    } catch (e: Exception) {
+                        WtrLogManager.log(context, "Backup decryption wrapper failed, checking raw parsing: ${e.message}")
+                        bufferedIn.reset()
+                        bufferedIn
                     }
                 }
 
-                // Decrypt if it doesn't look like JSON (doesn't start with {)
-                if (!jsonString.trim().startsWith("{")) {
-                    try {
-                        jsonString = BackupEncryption.decryptBackup(jsonString.trim())
-                    } catch (e: Exception) {
-                        WtrLogManager.log(context, "Backup decryption failed, attempting raw JSON parse: ${e.message}")
-                        throw Exception("Failed to decrypt secure backup. The file might be corrupted.", e)
-                    }
+                val jsonString = kotlinx.coroutines.withTimeout(30000L) {
+                    val reader = java.io.BufferedReader(java.io.InputStreamReader(processingStream, "UTF-8"))
+                    reader.use { it.readText() }
                 }
 
                 val json = org.json.JSONObject(jsonString)
@@ -549,7 +579,12 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 }
             } finally {
                 try {
-                    inputStream?.close()
+                    processingStream?.close()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+                try {
+                    rawInputStream?.close()
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
