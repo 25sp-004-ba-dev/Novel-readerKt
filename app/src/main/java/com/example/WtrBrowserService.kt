@@ -719,10 +719,15 @@ class WtrBrowserService : Service() {
 
         // Android 14 requirements: Foreground service type mediaPlayback. 
         // We always use startForeground to enroll/keep active safely.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            WtrLogManager.log(applicationContext, "⚠️ startForeground failed Safely: ${e.message}")
+            e.printStackTrace()
         }
 
         // Manage WakeLock & WifiLock based on playing state (called after startForeground for correct AppOps association)

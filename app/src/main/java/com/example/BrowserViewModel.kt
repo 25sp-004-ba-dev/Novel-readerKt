@@ -207,21 +207,33 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun onPageLoaded(url: String, title: String) {
+        val trimmedUrl = url.trim()
+        val trimmedTitle = title.trim()
+
+        // Ignore invalid schemas or excessively large/data URIs
+        if (trimmedUrl.startsWith("data:") || trimmedUrl.startsWith("blob:") || trimmedUrl.length > 2048) {
+            return
+        }
+
+        // Clean control characters from titles and URLs to prevent database issues
+        val sanitizedUrl = trimmedUrl.replace(Regex("\\p{Cc}"), "")
+        val sanitizedTitle = trimmedTitle.replace(Regex("\\p{Cc}"), "").take(512)
+
         viewModelScope.launch {
             val current = _currentTab.value
-            if (current != null && (current.url != url || current.title != title)) {
-                com.example.WtrLogManager.log(getApplication(), "onPageLoaded updates tab ID=${current.id} from ${current.url} to $url (title=$title)")
-                val updated = current.copy(url = url, title = title)
+            if (current != null && (current.url != sanitizedUrl || current.title != sanitizedTitle)) {
+                com.example.WtrLogManager.log(getApplication(), "onPageLoaded updates tab ID=${current.id} from ${current.url} to $sanitizedUrl (title=$sanitizedTitle)")
+                val updated = current.copy(url = sanitizedUrl, title = sanitizedTitle)
                 repository.updateTab(updated)
                 _currentTab.value = updated
-                _currentUrlInput.value = url
+                _currentUrlInput.value = sanitizedUrl
             }
-            if (lastHistoryUrl != url) {
-                lastHistoryUrl = url
-                repository.insertHistory(url, title)
+            if (lastHistoryUrl != sanitizedUrl) {
+                lastHistoryUrl = sanitizedUrl
+                repository.insertHistory(sanitizedUrl, sanitizedTitle)
             }
             try {
-                repository.updateReadingProgress(url, title)
+                repository.updateReadingProgress(sanitizedUrl, sanitizedTitle)
             } catch (e: Exception) {
                 e.printStackTrace()
             }
