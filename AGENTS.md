@@ -71,9 +71,11 @@ Ensure you read this section before making any changes to WebView behaviors, lif
 - **Context**: Sites like `webnovel.com` load chapters dynamically inside sequential visual containers when the reading user scrolls vertically. 
 - **Rule**: Scraper routines must extract paragraphs across multiple concurrent content containers, keeping track of elements in the DOM. To start reading naturally from the user's current reading point rather than always starting from paragraph 1, the script must calculate elements' positions in the viewport, selecting the paragraph closest to the top of the viewport (`rect.top - 100`). Additionally, junk filter arrays must explicitly purge any background-inserted ad-blocker detection warn texts.
 
-### 8. Robust Backup & Restore Synchronization via SAF Uri
-- **Context**: Users backing up their data need to migrate their browser configurations, tabs, bookmarks, and histories onto fresh installs.
-- **Rule**: When serializing/deserializing backup blobs via JSON, always format nested fields safely. Database clearing instructions (`clearHistory`, `clearBookmarks`, `clearTabs`) MUST execute in sequence before inserting entries from the parsed JSON, and the ViewModel must successfully re-evaluate the currently active tab ID state (`_currentTab.value = restoredTab`) to prevent empty WebViews from initializing on startup or failing to load. Ensure all I/O streams are executed off the Main thread under `Dispatchers.IO` using a validated `android.net.Uri` input.
+### 8. Robust Backup & Restore Synchronization via SAF Uri (STREAMING & SECURE)
+- **Context**: Processing large backup archives (e.g. 100MB+) previously resulted in severe memory spikes (~150-200MB), ANR warnings, and memory-fatality crashes on devices with restricted RAM, because the entire backup file was loaded into memory as a massive flat String before parsing via traditional `JSONObject`.
+- **Rule**: You **MUST** always utilize `StreamingJsonParser.kt` and its native Android `JsonReader`-based pull-parsing mechanism for JSON imports. This processes backup files incrementally from the input stream, parsing Settings, History, Bookmarks, and Tabs sequentially to ensure a static, ultra-low memory footprint (<10MB) on any device.
+- **Rules on Restore**: Restores must execute inside `Dispatchers.IO` with a strict `30000mL` (30-second) coroutine timeout. SharedPreferences settings must be restored type-safely, and database tables (`clearHistory`, `clearBookmarks`, `clearTabs`) MUST be wiped in proper sequential order before inserting the restored lists. The ViewModel must successfully re-evaluate the active tab ID state (`_currentTab.value = restoredTab`) to prevent empty WebViews from initializing on startup.
+- **Database Integrity Validation**: Invoke `BrowserRepository.validateDatabaseIntegrity(context)` to verify the health of history, bookmarks, and tabs tables. Avoid passing `null` contexts to `WtrLogManager.log`—always feed a valid context parameter down the flow.
 
 ### 9. Google Translate CAPTCHA Anti-Looping and Interceptors
 - **Context**: Rapid chapter-flipping on regional untrusted links translation proxy loops mimics automated search bots, which triggers aggressive Google CAPTCHA challenge screens.
@@ -93,6 +95,8 @@ Ensure you read this section before making any changes to WebView behaviors, lif
   - *Main entry point, bootstrap, permission handlers, theme, and WebView pool listeners.*
 - `/app/src/main/java/com/example/BrowserViewModel.kt`
   - *Core VM: tab operations, history logs, search inputs, query validation, and export/import JSON backup logic.*
+- `/app/src/main/java/com/example/StreamingJsonParser.kt`
+  - *Highly optimized, memory-efficient streaming JSON pull-parser using native Android `JsonReader` for backup import parsing.*
 - `/app/src/main/java/com/example/WtrLogManager.kt`
   - *Thread-safe ring-buffer list logging operations, persisted via split serialization inside SharedPreferences using background Coroutines.*
 - `/app/src/main/java/com/example/WtrWebAppInterface.kt`

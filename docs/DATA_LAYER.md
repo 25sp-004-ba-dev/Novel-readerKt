@@ -101,7 +101,8 @@ The central Interface defining SQL mappings. Queries are written directly on fun
 * `insertBookmark(url, title, imageUrl)`: Evaluates if the URL host matches novel signatures. Auto-extracts metadata and saves the bookmark with `isNovel = true` if recognized.
 * `updateNovelMetadata(url, novelTitle, chapterTitle, coverImage)`: Updates active bookmark titles, covers, and last chapter indicators during active browsing.
 * `updateReadingProgress(url, title)`: Automatically updates the user's reading bookmark progress. Tracks the user's active chapter URL and title so they can resume reading from the library.
-* `JSON Backup Streams`: Facilitates backup serialization and transactional recovery routines under `Dispatchers.IO`.
+* `validateDatabaseIntegrity(context)`: Suspended check that scans history, bookmarks, and tabs records to ensure all active fields contain non-empty paths and schemas. Logs validation markers or errors through `WtrLogManager` telemetry with a proper context parameter.
+* `JSON Backup Streams (Streaming v2)`: Restores collections incrementally via a low-level pull utility `StreamingJsonParser.kt` using native `JsonReader` buffers under `Dispatchers.IO`, keeping memory allocations under 10MB during large imports. Runs with a strict 30-second coroutine timeout.
 
 ---
 

@@ -114,3 +114,11 @@ When multiple tabs are opened with separate visual states, users expect consiste
 - **Rule of Isolation**: The audio stream belongs exclusively to the claimed tab ID (`WtrAudioControlBridge.activeTtsTabId`).
 - Changing active browser viewing tabs (Tab A -> Tab B) must **never** disrupt the background playing TTS belonging to Tab A, unless the user starts a fresh TTS playback session elements inside Tab B.
 - Initiating TTS inside Tab B claims tab-ownership, resetting Tab A's audio pipeline cleanly to prevent overlapping spoken audio voices from different tabs.
+
+---
+
+## 🗃️ Incremental Streaming Restoration & Database Verification
+
+To support massive histories and bookmarks on low-end units:
+- **Stream Processing**: The data layer transitions completely to incremental pull-parsing via `StreamingJsonParser.kt`, feeding tokens directly to SQL transactions without intermediate large allocations.
+- **Verification Filters**: Checks standard columns in background routines to preserve database schema integrity (`validateDatabaseIntegrity()`), preventing blank URLs from entering repositories.
