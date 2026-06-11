@@ -208,6 +208,8 @@ class WtrBrowserService : Service() {
                         if (WtrAudioControlBridge.isAudiobookModeActive.value) {
                             android.os.Handler(android.os.Looper.getMainLooper()).post {
                                 WtrAudioControlBridge.triggerNextChapter()
+                                WtrAudioControlBridge.setIsAudiobookModeActive(true)
+                                com.example.WtrLogManager.log(applicationContext, "Auto-next triggered. Waiting for page load...")
                             }
                         } else {
                             WtrAudioControlBridge.setIsPlayerRunning(false)
@@ -425,6 +427,8 @@ class WtrBrowserService : Service() {
             } else if (WtrAudioControlBridge.isAudiobookModeActive.value) {
                 android.os.Handler(android.os.Looper.getMainLooper()).post {
                     WtrAudioControlBridge.triggerNextChapter()
+                    WtrAudioControlBridge.setIsAudiobookModeActive(true)
+                    com.example.WtrLogManager.log(applicationContext, "Auto-next triggered. Waiting for page load...")
                 }
             }
         }

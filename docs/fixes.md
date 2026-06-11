@@ -208,3 +208,15 @@ WtrAudioControlBridge.nextChapterAction = {
 - **Pre-fix State**: The generic `.show_txt` selector was assigned to both `TimoTxtSupport` and `Novel543Support`. Because `TimoTxtSupport` listed `#content` prior to `.show_txt` in its `containerSelectors` configuration, the scraper favored `#content` (which wraps navigational elements and other page chrome text) rather than specifically isolating the text core class `.show_txt`. Moreover, the hardcoded older javascript parsers inside `BrowserAppScreen.kt` executed the selectors in the same problematic order when validating fallback paths, completely breaking TimoTxt.
 - **Solution**: Reorganized selectors in `WebsiteSupportImpls.kt` such that `TimoTxtSupport` ranks `.show_txt` first. Removed the `.show_txt` selector completely from `Novel543Support` (which uses `#content`) to eliminate collision paths. Rewrote the hardcoded JavaScript fallback references inside `BrowserAppScreen.kt` (lines 1515 & 1736) to dynamically prioritize `.show_txt` over `#content` on `timotxt.com` visits, securing robust and clean paragraph listings.
 
+### 25. Robust Auto-Play TTS and Redirection Coordination during Auto-Next Transitions
+
+- **Pre-fix State**: Auto-next chapter transitions often failed to trigger auto-start TTS, specifically on auto-translation domains (such as TimoTxt or Novel543). This happened due to a combination of three critical race conditions:
+  1. Transitioning across translated/untranslated page boundaries (e.g., from `*.translate.goog` to native `timotxt.com`) was incorrectly treated as a complete Host Change because of raw subdomain host comparisons. This triggered a total state wipe of active tracklists and playing states, resetting the audiobook context.
+  2. The page-load extraction checks exited early and did nothing on pages matched for auto-translation to prevent the scraper from pulling untranslated texts during the redirect, but did not handle scenarios where the translation redirect failed or completed in place.
+  3. When the foreground service triggered the next chapter, there was no subsequent signal to explicitly preserve the active audiobook mode.
+- **Solution**: Evaluated and fixed all three issues comprehensively:
+  1. Normalized hostnames inside the tab URL observer `LaunchedEffect` in `BrowserAppScreen.kt` to strip `.translate.goog` proxies and hyphens, preventing false host change triggers during proxy redirects.
+  2. Implemented a robust intelligent wait-or-proceed loop inside `pageLoadBackgroundLogic` that checks for a Google Translate redirect across 1.5s (5 intervals of 300ms) and initiates playback on the translated page once loaded, or gracefully extracts the original page as fallback to avoid stalls.
+  3. Modified the background service `WtrBrowserService.kt` to explicitly reinforce the `isAudiobookModeActive` state and log trace bounds to `WtrLogManager` for easier debugging.
+
+
