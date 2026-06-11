@@ -1433,7 +1433,7 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
             }
         } catch (e: Exception) { "" }
         val isSameHost = host1.isNotEmpty() && host2.isNotEmpty() && host1 == host2
-        val urlChanged = isSameTab && currentUrl.isNotEmpty() && previousUrl.isNotEmpty() && !isSameBaseOrTranslatedUrl(previousUrl, currentUrl) && !isSameHost
+        val urlChanged = isSameTab && currentUrl.isNotEmpty() && previousUrl.isNotEmpty() && !isSameBaseOrTranslatedUrl(previousUrl, currentUrl)
         
         if (urlChanged) {
             if (isAudiobookModeActive) {

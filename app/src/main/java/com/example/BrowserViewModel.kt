@@ -252,7 +252,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             return if (matchedSupport.siteId == "wtr-lab") "https://wtr-lab.com/en" else "https://$pDomain/"
         }
 
-        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+        if (trimmed.startsWith("http://")) {
+            return "https://" + trimmed.substring(7)
+        } else if (trimmed.startsWith("https://")) {
             return trimmed
         }
         val hasSpace = trimmed.contains(" ")
