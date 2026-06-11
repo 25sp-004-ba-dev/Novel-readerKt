@@ -51,9 +51,15 @@ object WebsiteSupportRegistry {
         }
         
         // Clean out subdomains, translate proxies etc.
-        val cleanHost = host.replace("www.", "")
+        val isTranslated = host.contains("translate.goog")
+        var cleanHost = host.replace("www.", "")
             .replace(".translate.goog", "")
             .replace("translate.goog", "")
+        if (isTranslated) {
+            cleanHost = cleanHost.replace("--", "__HYPHEN__")
+                .replace("-", ".")
+                .replace("__HYPHEN__", "-")
+        }
             
         // First do exact domain match
         val exact = domainMap[cleanHost]

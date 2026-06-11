@@ -947,7 +947,7 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                     var startIdx = 0
                     var extractionSuccess = false
                     
-                    while (attempts < maxAttempts && (System.currentTimeMillis() - startTime) < 5000L) {
+                    while (attempts < maxAttempts && (System.currentTimeMillis() - startTime) < 7000L) {
                         val resultString = suspendCoroutine<String?> { continuation ->
                             webView.post {
                                 val containerSelectorStrEscaped = containerSelectorStr.replace("\"", "\\\"")
@@ -1246,6 +1246,7 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                         }
                         WtrAudioControlBridge.setActiveTtsTabId(curTabId)
                         
+                        val previousExtractedUrl = WtrAudioControlBridge.extractedUrl.value
                         WtrAudioControlBridge.setPlayTrackInputList(list)
                         WtrAudioControlBridge.setExtractedUrl(tabUrl)
                         
@@ -1253,7 +1254,7 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                         val startParagraph = if (savedProgressVal in list.indices) savedProgressVal else startIdx
                         
                         val isSameTab = (curTabId == activeTtsTabId)
-                        val isPlayingThisBook = WtrAudioControlBridge.isPlayerRunning.value && isSameTab && WtrAudioControlBridge.extractedUrl.value == tabUrl
+                        val isPlayingThisBook = WtrAudioControlBridge.isPlayerRunning.value && isSameTab && isSameBaseOrTranslatedUrl(previousExtractedUrl, tabUrl)
                         
                         if (!isPlayingThisBook) {
                             WtrAudioControlBridge.setCurrentTrackIndex(startParagraph)
@@ -1411,11 +1412,25 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
         val isSameTab = currentTabId == previousTabId
         val host1 = try {
             val h = android.net.Uri.parse(previousUrl).host?.replace("www.", "") ?: ""
-            h.replace(".translate.goog", "").replace("translate.goog", "").replace("-", ".")
+            if (h.contains("translate.goog")) {
+                h.replace(".translate.goog", "").replace("translate.goog", "")
+                    .replace("--", "__HYPHEN__")
+                    .replace("-", ".")
+                    .replace("__HYPHEN__", "-")
+            } else {
+                h
+            }
         } catch (e: Exception) { "" }
         val host2 = try {
             val h = android.net.Uri.parse(currentUrl).host?.replace("www.", "") ?: ""
-            h.replace(".translate.goog", "").replace("translate.goog", "").replace("-", ".")
+            if (h.contains("translate.goog")) {
+                h.replace(".translate.goog", "").replace("translate.goog", "")
+                    .replace("--", "__HYPHEN__")
+                    .replace("-", ".")
+                    .replace("__HYPHEN__", "-")
+            } else {
+                h
+            }
         } catch (e: Exception) { "" }
         val isSameHost = host1.isNotEmpty() && host2.isNotEmpty() && host1 == host2
         val urlChanged = isSameTab && currentUrl.isNotEmpty() && previousUrl.isNotEmpty() && !isSameBaseOrTranslatedUrl(previousUrl, currentUrl) && !isSameHost
