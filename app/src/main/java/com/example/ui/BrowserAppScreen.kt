@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewModelScope
 import com.example.BrowserViewModel
 import com.example.BrowserSection
 import com.example.MainActivity
@@ -152,7 +153,7 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
     var currentThemeName by remember { mutableStateOf(sharedPrefs.getString("app_theme", "Dark") ?: "Dark") }
 
     var urlText by remember { mutableStateOf("") }
-    var extractedUrlOfActiveTracks by remember { mutableStateOf("") }
+    val extractedUrlOfActiveTracks by WtrAudioControlBridge.extractedUrl.collectAsStateWithLifecycle()
 
     val webViewsMap = remember { mutableStateMapOf<Long, WebView>() }
 
@@ -262,6 +263,107 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
         }
     }
 
+    var isGeminiTranslating by remember { mutableStateOf(false) }
+    val currentGeminiTranslateEnabled by rememberUpdatedState(geminiTranslateEnabled)
+    val currentGeminiApiKey by rememberUpdatedState(geminiApiKey)
+    val currentAutoTranslateEnabled by rememberUpdatedState(autoTranslateEnabled)
+    
+    val pageLoadBackgroundLogic: (String, WebView) -> Unit = { urlVal, webView ->
+        if (urlVal.isNotEmpty() && urlVal != "chrome://newtab") {
+            viewModel.viewModelScope.launch(Dispatchers.Main) {
+                val isTranslateTarget = currentGeminiTranslateEnabled && currentGeminiApiKey.isNotEmpty() && isDomainMatchedForTranslation(urlVal) && isNovelChapterUrl(urlVal)
+                if (isTranslateTarget) {
+                    isGeminiTranslating = true
+                    try {
+                        val extractionJs = """
+                            (function() {
+                                let paragraphs = [];
+                                let pTags = document.querySelectorAll('p');
+                                if (pTags.length === 0) pTags = document.querySelectorAll('div, span');
+                                function isJunk(text) {
+                                    let t = text.toLowerCase().trim();
+                                    if (t.length < 5) return true;
+                                    const promoKeywords = ["join our discord", "join discord", "patreon", "support me", "support the author", "rate this", "please review", "please rate", "author's note", "author note", "recommend", "translator", "translation", "editor's note", "editor note"];
+                                    return promoKeywords.some(keyword => t.includes(keyword));
+                                }
+                                pTags.forEach(p => {
+                                    let text = p.innerText.trim();
+                                    if (text.length > 5 && !isJunk(text)) {
+                                        p.setAttribute('wtr-translation-id', paragraphs.length);
+                                        paragraphs.push(text);
+                                    }
+                                });
+                                return JSON.stringify(paragraphs);
+                            })();
+                        """.trimIndent()
+                        val paragraphsJson = suspendCancellableCoroutine<String> { continuation ->
+                            webView.evaluateJavascript(extractionJs) { result ->
+                                if (continuation.isActive) continuation.resume(result ?: "[]")
+                            }
+                        }
+                        val cleanJson = if (paragraphsJson.startsWith("\"") && paragraphsJson.endsWith("\"")) {
+                            try { org.json.JSONTokener(paragraphsJson).nextValue() as String } catch(e: Exception) { paragraphsJson }
+                        } else paragraphsJson
+                        val paragraphsList = mutableListOf<String>()
+                        try {
+                            val jsonArray = org.json.JSONArray(cleanJson)
+                            for (i in 0 until jsonArray.length()) paragraphsList.add(jsonArray.getString(i))
+                        } catch (e: Exception) {}
+                        if (paragraphsList.isNotEmpty()) {
+                            val translatedList = com.example.GeminiTranslator.translateParagraphs(paragraphsList, currentGeminiApiKey)
+                            val translationMapJson = org.json.JSONArray()
+                            translatedList.forEachIndexed { index, text ->
+                                val obj = org.json.JSONObject()
+                                obj.put("id", index)
+                                obj.put("text", text)
+                                translationMapJson.put(obj)
+                            }
+                            val injectionJs = """
+                                (function() {
+                                    try {
+                                        const translations = ${translationMapJson.toString()};
+                                        translations.forEach(item => {
+                                            const el = document.querySelector('[wtr-translation-id="' + item.id + '"]');
+                                            if (el) el.innerText = item.text;
+                                        });
+                                        return "success";
+                                    } catch(e) { return "error: " + e.toString(); }
+                                })();
+                            """.trimIndent()
+                            suspendCancellableCoroutine<String> { continuation ->
+                                webView.evaluateJavascript(injectionJs) { result ->
+                                    if (continuation.isActive) continuation.resume(result ?: "")
+                                }
+                            }
+                        }
+                    } catch (e: Exception) { e.printStackTrace() } finally {
+                        isGeminiTranslating = false
+                        if (WtrAudioControlBridge.isAudiobookModeActive.value) {
+                            delay(400)
+                            runHtmlTextExtractionAndPlayRef?.invoke()
+                        }
+                    }
+                } else {
+                    if (WtrAudioControlBridge.isAudiobookModeActive.value) {
+                         if (currentAutoTranslateEnabled && isDomainMatchedForTranslation(urlVal) && !urlVal.contains("translate.goog")) {
+                         } else {
+                             val isWtrLab = urlVal.contains("wtr-lab.com") || urlVal.isEmpty()
+                             if (!isWtrLab && isNovelChapterUrl(urlVal)) {
+                                 delay(800)
+                                 runHtmlTextExtractionAndPlayRef?.invoke()
+                             } else {
+                                 WtrAudioControlBridge.setIsPlayerRunning(false)
+                                 if (isWtrLab) {
+                                     WtrAudioControlBridge.setIsAudiobookModeActive(false)
+                                 }
+                             }
+                         }
+                    }
+                }
+            }
+        }
+    }
+
     // Resolve or build WebView content for the current selected tab
     val currentActiveWebView = activeTab?.let { tab ->
         webViewsMap.getOrPut(tab.id) {
@@ -359,8 +461,10 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                         if (viewModel.currentTab.value?.id == tab.id) {
                             isWebLoading = false
                             webProgress = 100
-                            if (url != null) {
-                                viewModel.onPageLoaded(url, view?.title ?: "Wtr-Lab")
+                            if (url != null && view != null) {
+                                viewModel.onPageLoaded(url, view.title ?: "Wtr-Lab")
+                                // Directly trigger background logic bypassing Compose pauses!
+                                pageLoadBackgroundLogic(url, view)
                             }
                         }
                         injectTtsBridgeScript(this@apply)
@@ -795,7 +899,7 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
         val webView = currentActiveWebView
         if (webView != null && !isExtracting) {
             isExtracting = true
-            coroutineScope.launch(Dispatchers.Main) {
+            viewModel.viewModelScope.launch(Dispatchers.Main) {
                 try {
                     val currentUrl = webView.url ?: ""
                     val currentUrlLower = currentUrl.lowercase()
@@ -927,18 +1031,12 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
 
                                                 let containers = [];
                                                 if (containerSelector) {
-                                                    if (host.includes("webnovel")) {
-                                                        let rawContainers = Array.from(document.querySelectorAll(containerSelector));
-                                                        containers = rawContainers.filter(c => !rawContainers.some(other => other !== c && other.contains(c)));
-                                                    } else {
-                                                        let els = document.querySelectorAll(containerSelector);
-                                                        if (els && els.length > 0) {
-                                                            els.forEach(el => containers.push(el));
-                                                        }
-                                                    }
+                                                    let rawContainers = Array.from(document.querySelectorAll(containerSelector));
+                                                    containers = rawContainers.filter(c => !rawContainers.some(other => other !== c && other.contains(c)));
                                                 }
 
                                                 if (containers.length > 0) {
+                                                    let seenPTags = new Set();
                                                     containers.forEach(contentEl => {
                                                         if (requiresBrPrep) {
                                                             prepareBrParagraphs(contentEl);
@@ -948,10 +1046,13 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                                                         
                                                         pTags.forEach(p => {
                                                             if (!p.closest(excludeClass)) {
-                                                                let text = p.innerText.trim();
-                                                                if (text.length > 5 && !isJunk(text)) {
-                                                                    paragraphs.push(text);
-                                                                    elements.push(p);
+                                                                if (!seenPTags.has(p)) {
+                                                                    seenPTags.add(p);
+                                                                    let text = p.innerText.trim();
+                                                                    if (text.length > 5 && !isJunk(text)) {
+                                                                        paragraphs.push(text);
+                                                                        elements.push(p);
+                                                                    }
                                                                 }
                                                             }
                                                         });
@@ -1127,15 +1228,23 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                         WtrAudioControlBridge.setActiveTtsTabId(curTabId)
                         
                         WtrAudioControlBridge.setPlayTrackInputList(list)
-                        extractedUrlOfActiveTracks = tabUrl
+                        WtrAudioControlBridge.setExtractedUrl(tabUrl)
                         
                         val savedProgressVal = getSavedParagraphIndex(context, tabUrl)
                         val startParagraph = if (savedProgressVal in list.indices) savedProgressVal else startIdx
-                        WtrAudioControlBridge.setCurrentTrackIndex(startParagraph)
                         
-                        android.widget.Toast.makeText(context, "Ready! Starting at Paragraph ${startParagraph + 1}", android.widget.Toast.LENGTH_SHORT).show()
+                        val isSameTab = (curTabId == activeTtsTabId)
+                        val isPlayingThisBook = WtrAudioControlBridge.isPlayerRunning.value && isSameTab && WtrAudioControlBridge.extractedUrl.value == tabUrl
                         
-                        playCustomParagraph(startParagraph)
+                        if (!isPlayingThisBook) {
+                            WtrAudioControlBridge.setCurrentTrackIndex(startParagraph)
+                            android.widget.Toast.makeText(context, "Ready! Starting at Paragraph ${startParagraph + 1}", android.widget.Toast.LENGTH_SHORT).show()
+                            playCustomParagraph(startParagraph)
+                        } else {
+                            // Already playing this URL in background, just updated the DOM (maybe Gemini translations arrived)
+                            // Do not overwrite index to prevent resetting to 0 when opening app
+                            com.example.WtrLogManager.log(context, "App opened while playing. Keeping track index at ${WtrAudioControlBridge.currentTrackIndex.value}")
+                        }
                     } else {
                         android.widget.Toast.makeText(context, "Ah, we couldn't segment paragraphs text here. Check settings.", android.widget.Toast.LENGTH_LONG).show()
                     }
@@ -1197,13 +1306,8 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                                 });
                                 
                                 if (nextLink) {
-                                    let href = nextLink.getAttribute('href');
                                     nextLink.click();
-                                    if (href) {
-                                        if (href.startsWith('/')) href = window.location.origin + href;
-                                        window.location.href = href;
-                                        return true;
-                                    }
+                                    return true;
                                 }
                             }
                             
@@ -1212,13 +1316,6 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                             let safeNext = nextElements.find(el => !isDangerousOrToggle(el));
                             if (safeNext) {
                                 safeNext.click();
-                                if (safeNext.tagName.toLowerCase() === 'a') {
-                                    let href = safeNext.getAttribute('href');
-                                    if (href) {
-                                        if (href.startsWith('/')) href = window.location.origin + href;
-                                        window.location.href = href;
-                                    }
-                                }
                                 return true;
                             }
                             
@@ -1229,22 +1326,18 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                         
                         if (host.includes("timotxt") || host.includes("novel543") || host.includes("twkan")) {
                             let nextElements = Array.from(document.querySelectorAll('a, button'));
-                            let target = nextElements.find(el => {
-                                let t = (el.innerText || el.textContent || '').trim();
-                                if (t === '下一页' || t === '下一章' || t === '下一頁' || t.includes('Next Chapter') || t.includes('Next Page')) {
-                                     return !isDangerousOrToggle(el);
-                                }
-                                return false;
-                            });
+                            
+                            function getValidTarget(keywords) {
+                                return nextElements.find(el => {
+                                    let t = (el.innerText || el.textContent || '').trim();
+                                    return keywords.some(k => t === k || t.includes(k)) && !isDangerousOrToggle(el);
+                                });
+                            }
+                            
+                            let target = getValidTarget(['下一章', 'Next Chapter', '下一頁', '下一页', 'Next Page']);
+                            
                             if (target) {
                                 target.click();
-                                if (target.tagName.toLowerCase() === 'a') {
-                                    let href = target.getAttribute('href');
-                                    if (href && href !== '#' && !href.startsWith('javascript:')) {
-                                        if (href.startsWith('/')) href = window.location.origin + href;
-                                        window.location.href = href;
-                                    }
-                                }
                                 return true;
                             }
                         }
@@ -1254,13 +1347,6 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                         let safeNext = nextElements.find(el => !isDangerousOrToggle(el));
                         if (safeNext) {
                             safeNext.click();
-                            if (safeNext.tagName.toLowerCase() === 'a') {
-                                let href = safeNext.getAttribute('href');
-                                if (href && href !== '#' && !href.startsWith('javascript:')) {
-                                    if (href.startsWith('/')) href = window.location.origin + href;
-                                    window.location.href = href;
-                                }
-                            }
                             return true;
                         } else {
                             let linksAndButtons = Array.from(document.querySelectorAll('a, button font, a font'));
@@ -1271,13 +1357,6 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                             if (target) {
                                 let actualEl = target.tagName.toLowerCase() === 'font' ? target.parentElement : target;
                                 actualEl.click();
-                                if (actualEl.tagName.toLowerCase() === 'a') {
-                                    let href = actualEl.getAttribute('href');
-                                    if (href && href !== '#' && !href.startsWith('javascript:')) {
-                                        if (href.startsWith('/')) href = window.location.origin + href;
-                                        window.location.href = href;
-                                    }
-                                }
                                 return true;
                             } else {
                                 let currentUrl = window.location.href;
@@ -1335,182 +1414,20 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
         previousTabId = currentTabId
     }
 
-    // Autosave TTS reading paragraph index when progress changes
-    LaunchedEffect(currentTrackIndex) {
-        val currentUrl = activeTab?.url ?: ""
-        if (currentUrl.isNotEmpty() && currentUrl == extractedUrlOfActiveTracks && currentUrl != "chrome://newtab" && currentTrackIndex >= 0) {
-            saveParagraphIndex(context, currentUrl, currentTrackIndex)
+    // Removed LaunchedEffect(currentTrackIndex) as WtrBrowserService now saves it in the background reliably.
+    LaunchedEffect(currentTrackIndexRaw, extractedUrlOfActiveTracks) {
+        if (extractedUrlOfActiveTracks.isNotEmpty()) {
+            saveParagraphIndex(context, extractedUrlOfActiveTracks, currentTrackIndexRaw)
         }
     }
 
     val currentRunExtractionAndPlay by rememberUpdatedState(runHtmlTextExtractionAndPlay)
     val currentTriggerNextChapter by rememberUpdatedState(triggerNextChapterNavigation)
 
-    var isGeminiTranslating by remember { mutableStateOf(false) }
-
-    // Detect page finished loading and auto-extract/resume in audiobook mode (observes URL updates to withstand translation redirects dynamically)
-    LaunchedEffect(isWebLoading, isAudiobookModeActive, activeTab?.url) {
-        if (!isWebLoading && isAudiobookModeActive) {
-            val urlVal = activeTab?.url ?: ""
-            
-            // If Gemini Translate is active on this page, wait until isGeminiTranslating is completed
-            if (geminiTranslateEnabled && geminiApiKey.isNotEmpty() && isDomainMatchedForTranslation(urlVal) && isNovelChapterUrl(urlVal)) {
-                return@LaunchedEffect
-            }
-            
-            // If the URL is scheduled for auto-translation, but Google Translate proxy is not yet loaded, skip this event and wait until the actual translated URL load completes
-            if (autoTranslateEnabled && isDomainMatchedForTranslation(urlVal) && !urlVal.contains("translate.goog")) {
-                return@LaunchedEffect
-            }
-            
-            val isWtrLab = urlVal.contains("wtr-lab.com") || urlVal.startsWith("file://") || urlVal.isEmpty() || urlVal == "chrome://newtab"
-            if (!isWtrLab) {
-                delay(800) // Settle DOM delay
-                currentRunExtractionAndPlay()
-            } else {
-                WtrAudioControlBridge.setIsAudiobookModeActive(false)
-            }
-        }
-    }
-
-    // Run Gemini Translation on page load completion
-    LaunchedEffect(isWebLoading, activeTab?.url, geminiTranslateEnabled, geminiApiKey) {
-        if (!isWebLoading && geminiTranslateEnabled && geminiApiKey.trim().isNotEmpty()) {
-            val urlVal = activeTab?.url ?: ""
-            if (urlVal.isNotEmpty() && urlVal != "chrome://newtab" && isDomainMatchedForTranslation(urlVal) && isNovelChapterUrl(urlVal)) {
-                val webView = currentActiveWebView
-                if (webView != null) {
-                    isGeminiTranslating = true
-                    try {
-                        com.example.WtrLogManager.log(context, "Gemini Translation: Starting page translation for $urlVal")
-                        
-                        // Step 1: Assign IDs and Extract raw text paragraphs
-                        val extractionJs = """
-                            (function() {
-                                let paragraphs = [];
-                                let pTags = document.querySelectorAll('p');
-                                if (pTags.length === 0) {
-                                    pTags = document.querySelectorAll('div, span');
-                                }
-                                
-                                function isJunk(text) {
-                                    let t = text.toLowerCase().trim();
-                                    if (t.length < 5) return true;
-                                    const promoKeywords = [
-                                        "join our discord", "join discord", "patreon", "support me", "support the author",
-                                        "rate this", "please review", "please rate", "author's note", "author note",
-                                        "recommend", "translator", "translation", "editor's note", "editor note"
-                                    ];
-                                    return promoKeywords.some(keyword => t.includes(keyword));
-                                }
-
-                                pTags.forEach(p => {
-                                    let text = p.innerText.trim();
-                                    if (text.length > 5 && !isJunk(text)) {
-                                        let pid = paragraphs.length;
-                                        p.setAttribute('wtr-translation-id', pid);
-                                        paragraphs.push(text);
-                                    }
-                                });
-                                return JSON.stringify(paragraphs);
-                            })();
-                        """.trimIndent()
-
-                        val paragraphsJson = suspendCancellableCoroutine<String> { continuation ->
-                            webView.evaluateJavascript(extractionJs) { result ->
-                                if (continuation.isActive) {
-                                    continuation.resume(result ?: "[]") {}
-                                }
-                            }
-                        }
-
-                        // Parse extraction JSON
-                        val cleanJson = if (paragraphsJson.startsWith("\"") && paragraphsJson.endsWith("\"")) {
-                            try {
-                                val unescaped = org.json.JSONTokener(paragraphsJson).nextValue() as String
-                                unescaped
-                            } catch (e: Exception) {
-                                paragraphsJson
-                            }
-                        } else {
-                            paragraphsJson
-                        }
-
-                        val paragraphsList = mutableListOf<String>()
-                        try {
-                            val jsonArray = org.json.JSONArray(cleanJson)
-                            for (i in 0 until jsonArray.length()) {
-                                paragraphsList.add(jsonArray.getString(i))
-                            }
-                        } catch (e: Exception) {
-                            com.example.WtrLogManager.log(context, "Gemini Translation: Error parsing extracted paragraphs: ${e.message}")
-                        }
-
-                        if (paragraphsList.isNotEmpty()) {
-                            com.example.WtrLogManager.log(context, "Gemini Translation: Sending ${paragraphsList.size} paragraphs to gemini-2.5-flash...")
-                            
-                            // Step 2: Call Gemini API
-                            val translatedList = com.example.GeminiTranslator.translateParagraphs(
-                                paragraphsList,
-                                geminiApiKey
-                            )
-
-                            // Step 3: Inject translated paragraphs back into WebView DOM
-                            val translationMapJson = org.json.JSONArray()
-                            translatedList.forEachIndexed { index, text ->
-                                val obj = org.json.JSONObject()
-                                obj.put("id", index)
-                                obj.put("text", text)
-                                translationMapJson.put(obj)
-                            }
-
-                            val injectionJs = """
-                                (function() {
-                                    try {
-                                        const translations = ${translationMapJson.toString()};
-                                        translations.forEach(item => {
-                                            const el = document.querySelector('[wtr-translation-id="' + item.id + '"]');
-                                            if (el) {
-                                                el.innerText = item.text;
-                                            }
-                                        });
-                                        return "success";
-                                    } catch(e) {
-                                        return "error: " + e.toString();
-                                    }
-                                })();
-                            """.trimIndent()
-
-                            webView.evaluateJavascript(injectionJs) { result ->
-                                com.example.WtrLogManager.log(context, "Gemini Translation: Injection result: $result")
-                            }
-                            
-                            com.example.WtrLogManager.log(context, "Gemini Translation: Completed translation successfully!")
-                        } else {
-                            com.example.WtrLogManager.log(context, "Gemini Translation: No translatable paragraphs found.")
-                        }
-                    } catch (e: Exception) {
-                        com.example.WtrLogManager.log(context, "Gemini Translation Error: ${e.message}")
-                        android.widget.Toast.makeText(context, "Gemini translation error: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
-                    } finally {
-                        isGeminiTranslating = false
-                    }
-                }
-            }
-        }
-    }
-
-    // Resume audiobook play once Gemini translation has completed
-    LaunchedEffect(isGeminiTranslating, isAudiobookModeActive, isWebLoading) {
-        if (geminiTranslateEnabled && geminiApiKey.isNotEmpty() && !isGeminiTranslating && isAudiobookModeActive && !isWebLoading) {
-            val urlVal = activeTab?.url ?: ""
-            if (urlVal.isNotEmpty() && urlVal != "chrome://newtab" && isDomainMatchedForTranslation(urlVal) && isNovelChapterUrl(urlVal)) {
-                delay(400) // Settle DOM delay
-                currentRunExtractionAndPlay()
-            }
-        }
-    }
-
+    // Removed LaunchedEffect(isWebLoading, isAudiobookModeActive, activeTab?.url) and Gemini translation effects 
+    // because they fail in the background when the Compose View is suspended.
+    // They are now manually triggered via pageLoadBackgroundLogic inside onPageFinished!
+    
     // Pre-extract paragraphs of the current page for fallback background playback on standard webpage TTS speechSynthesis
     LaunchedEffect(isWebLoading, activeTab?.url) {
         if (!isWebLoading) {
@@ -1595,7 +1512,7 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                                     });
                                 }
                             } else if (host.includes("timotxt") || host.includes("novel543") || host.includes("wtr-lab")) {
-                                contentEl = host.includes("timotxt") ? (document.querySelector('#content') || document.querySelector('.show_txt') || document.querySelector('.read-content')) : (document.querySelector('.read-content') || document.querySelector('#content') || document.querySelector('.show_txt') || document.querySelector('.wtr-reader-content'));
+                                contentEl = host.includes("timotxt") ? (document.querySelector('.show_txt') || document.querySelector('#content') || document.querySelector('.read-content')) : (document.querySelector('.read-content') || document.querySelector('#content') || document.querySelector('.show_txt') || document.querySelector('.wtr-reader-content'));
                                 if (contentEl) {
                                     let pTags = contentEl.querySelectorAll('p, .wtr-line-segment');
                                     pTags.forEach(p => {
@@ -1816,7 +1733,7 @@ fun BrowserAppScreen(webView: WebView, onThemeChanged: (String) -> Unit = {}) {
                             });
                         }
                     } else if (host.includes("timotxt") || host.includes("novel543")) {
-                        let contentEl = host.includes("timotxt") ? (document.querySelector('#content') || document.querySelector('.show_txt') || document.querySelector('.read-content')) : (document.querySelector('.show_txt') || document.querySelector('#content'));
+                        let contentEl = host.includes("timotxt") ? (document.querySelector('.show_txt') || document.querySelector('#content') || document.querySelector('.read-content')) : (document.querySelector('.show_txt') || document.querySelector('#content'));
                         if (contentEl) {
                             prepareBrParagraphs(contentEl);
                             let pTags = contentEl.querySelectorAll('p, .wtr-line-segment');

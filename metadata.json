@@ -2,7 +2,5 @@
   "name": "Novel Reader",
   "description": "Premium browser with back-to-front media bridging for native website TTS playback on Wtr-Lab novels.",
   "requestFramePermissions": [],
-  "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
-  ]
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

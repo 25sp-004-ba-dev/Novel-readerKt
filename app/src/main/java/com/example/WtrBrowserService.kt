@@ -389,6 +389,17 @@ class WtrBrowserService : Service() {
         if (list.isNotEmpty()) {
             val validIndex = index.coerceIn(0, list.size - 1)
             WtrAudioControlBridge.setCurrentTrackIndex(validIndex)
+            
+            // Autosave reading paragraph index dynamically in background
+            val url = WtrAudioControlBridge.extractedUrl.value
+            if (url.isNotEmpty() && url != "chrome://newtab") {
+                try {
+                     if (getSharedPreferences("wtr_browser_settings", android.content.Context.MODE_PRIVATE).getBoolean("remember_paragraphs", true)) {
+                         getSharedPreferences("wtr_browser_paragraphs", android.content.Context.MODE_PRIVATE).edit().putInt(url, validIndex).apply()
+                     }
+                } catch(e: Exception) {}
+            }
+            
             val textToSpeak = list[validIndex]
             WtrAudioControlBridge.setCurrentlySpeakingText(textToSpeak)
             WtrAudioControlBridge.setIsPlayerRunning(true)

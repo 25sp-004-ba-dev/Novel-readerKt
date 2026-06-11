@@ -29,6 +29,9 @@ object WtrAudioControlBridge {
 
     private val _activeWebsite = MutableStateFlow("")
     val activeWebsite: StateFlow<String> = _activeWebsite
+    
+    private val _extractedUrl = MutableStateFlow("")
+    val extractedUrl: StateFlow<String> = _extractedUrl
 
     fun setNovelAndChapter(novel: String, chapter: String) {
         _novelName.value = novel
@@ -37,6 +40,10 @@ object WtrAudioControlBridge {
 
     fun setActiveWebsite(website: String) {
         _activeWebsite.value = website
+    }
+    
+    fun setExtractedUrl(url: String) {
+        _extractedUrl.value = url
     }
 
     // Speech speed multiplier status

@@ -110,7 +110,7 @@ class TimoTxtSupport : WebsiteSupport {
     override val keywords = listOf("timo", "timotxt")
     override val requiresAutoTranslate = true
 
-    override val containerSelectors = listOf("#content", ".show_txt", ".read-content")
+    override val containerSelectors = listOf(".show_txt", "#content", ".read-content")
     override val paragraphSelector = CommonSelectors.STANDARD_PARAGRAPH
     override val excludeSelectors = CommonSelectors.COMMON_EXCLUDE
     override val requiresBrPreparation = true
@@ -126,7 +126,7 @@ class Novel543Support : WebsiteSupport {
     override val keywords = listOf("n543", "novel543")
     override val requiresAutoTranslate = true
 
-    override val containerSelectors = listOf(".show_txt", "#content", ".content", ".txtnav", ".chapter-content", ".article-content")
+    override val containerSelectors = listOf("#content", ".content", ".chapter-content", ".article-content")
     override val paragraphSelector = CommonSelectors.STANDARD_PARAGRAPH
     override val excludeSelectors = CommonSelectors.COMMON_EXCLUDE
     override val requiresBrPreparation = true
